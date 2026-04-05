@@ -1,0 +1,4 @@
+# V-MUX capture tool dependencies
+# Install with: pip install -r requirements.txt
+
+pyserial>=3.5
