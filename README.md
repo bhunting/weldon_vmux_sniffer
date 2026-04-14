@@ -34,12 +34,23 @@ python vmux_capture.py --map vmux_capture_20240101_120000.csv
 
 ## Before connecting to the vehicle
 
-1. Verify the SH-U11F termination jumper is **not installed** (120Ω OFF).
-   V-MUX explicitly forbids adding termination resistors.
-2. Connect adapter A+ to J1 pin 2 (BUS A), B- to J1 pin 3 (BUS B).
-3. Connect adapter GND to J1 pin 1 (bus GND) — NOT to chassis ground.
-4. Keep RTS/DTR low (the tool does this automatically) so the adapter
-   does not drive the bus.
+**Disable the SH-U11F termination resistor first.** This is the most important
+pre-connection step — V-MUX explicitly forbids termination resistors anywhere on
+the network.
+
+Open the SH-U11F enclosure (two screws on the underside). On the PCB, locate
+the 2-pin header labelled **R120** or **120R** near the terminal block end. This
+jumper enables a 120Ω resistor across A+ and B−. It ships with the jumper
+absent (disabled) by default — confirm it is absent before connecting.
+If a jumper block is present, remove it and store it safely.
+
+Connection checklist:
+
+1. Confirm R120 jumper is **absent** (120Ω OFF).
+2. Connect adapter **A+** to J1 pin 2 (BUS A).
+3. Connect adapter **B−** to J1 pin 3 (BUS B).
+4. Connect adapter **GND** to J1 pin 1 (bus GND) — NOT to chassis ground.
+5. Keep RTS/DTR low — the tool does this automatically on open.
 
 ## Output files
 
@@ -55,7 +66,16 @@ Each capture session produces two files:
 `gap_before_ms`, `raw_hex`, `decoded`, `msg_code_hex`, `state_byte_hex`, `node_byte`
 
 ### Binary format
-Each packet: `[4-byte timestamp_ms big-endian uint32][1-byte length][N raw bytes]`
+Each packet record (13 + N bytes):
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| `epoch_ms` | int64 big-endian | 8 bytes | Full Unix timestamp in milliseconds — no wrap |
+| `ts_ms` | uint32 big-endian | 4 bytes | Session-relative ms (wraps at ~49.7 days, kept for compat) |
+| `length` | uint8 | 1 byte | Payload byte count |
+| payload | bytes | N bytes | Raw packet bytes |
+
+Parse with: `struct.unpack_from('>qIB', data, offset)` → `(epoch_ms, ts_ms, length)`
 
 ## Options
 

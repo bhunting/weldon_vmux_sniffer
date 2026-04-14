@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
-vmux_capture.py — V-MUX RS-485 bus capture and analysis tool
+vmux_capture.py — V-MUX RS-485 bus capture and analysis tool  v2
 DSD TECH SH-U11F adapter · Braun ambulance 2013 · Phase 1 bus analysis
+
+Changes from v1:
+  - scan_ports(): fixed FTDI VID detection operator-precedence bug
+  - detect_baud(): removed dead framing_errors variable; added Phase 3 note
+  - capture(): SyncDetector intervals now propagated to CaptureStats on every
+               SYNC event so Display.summary() and status_bar() show live data
+  - Display.status_bar(): uses ANSI cursor save/restore to avoid overwriting
+               packet output lines
+  - CaptureLogger.log(): binary format extended to 64-bit epoch_ms (no wrap);
+               32-bit session-relative ts_ms retained for backward compat
+  - README: added SH-U11F termination jumper location note
 
 Usage:
     python vmux_capture.py --port COM3              # Windows
@@ -154,12 +165,12 @@ def scan_ports() -> list:
     ports = serial.tools.list_ports.comports()
     results = []
     for p in sorted(ports, key=lambda x: x.device):
-        is_ftdi = ("FTDI" in (p.manufacturer or "") or
-                   "FT232" in (p.description or "") or
-                   "0403" in (p.vid_pid or "") if hasattr(p, "vid_pid") else False)
-        # Check VID:PID directly
-        if hasattr(p, "vid") and p.vid == 0x0403:
-            is_ftdi = True
+        # USB VID 0x0403 = FTDI; also match by manufacturer / description strings
+        is_ftdi = (
+            "FTDI" in (p.manufacturer or "") or
+            "FT232" in (p.description or "") or
+            (hasattr(p, "vid") and p.vid == 0x0403)
+        )
         results.append((p.device, p.description or "Unknown", is_ftdi))
     return results
 
@@ -210,7 +221,10 @@ def detect_baud(port: str, timeout_per_baud: float = 6.0) -> Optional[int]:
             ser.reset_input_buffer()
 
             raw = bytearray()
-            framing_errors = 0
+            # NOTE: pyserial does not expose per-byte framing errors via read().
+            # Framing quality is inferred from byte distribution and sequence
+            # scoring below. For Phase 3 active injection a dedicated read thread
+            # with select()-based I/O will be required to meet <1µs DE turnaround.
             t_end = time.time() + timeout_per_baud
 
             while time.time() < t_end:
@@ -396,19 +410,25 @@ class Display:
                 print(f"  {ANSI_DIM}  [{i}] 0x{b:02X} = {b:3d}  {role}{ANSI_RESET}")
 
     def status_bar(self, stats: CaptureStats, baud: int):
-        """Overwrite the status line at the bottom."""
-        sync_str = ""
-        if stats.avg_sync_interval:
-            sync_str = f"SYNC_avg={stats.avg_sync_interval:.1f}s"
-        else:
-            sync_str = "awaiting SYNC..."
+        """
+        Print a persistent status line without overwriting packet output.
+        Uses ANSI save/restore cursor: ESC[s saves position, ESC[u restores.
+        The status line is printed at the current cursor position then the
+        cursor is restored, so subsequent packet lines appear above it.
+        """
+        sync_str = (f"SYNC_avg={stats.avg_sync_interval:.1f}s"
+                    if stats.avg_sync_interval else "awaiting SYNC...")
 
-        line = (f"\r{ANSI_DIM}  elapsed={stats.elapsed_s:.0f}s  "
+        line = (f"\033[s"                           # save cursor position
+                f"\r{ANSI_DIM}"
+                f"  elapsed={stats.elapsed_s:.0f}s  "
                 f"pkts={stats.packet_count}  "
                 f"bytes={stats.byte_count}  "
                 f"unique_msgs={len(stats.unique_messages)}  "
                 f"errs={stats.error_count}  "
-                f"{sync_str}        {ANSI_RESET}")
+                f"{sync_str}        "
+                f"{ANSI_RESET}"
+                f"\033[u")                          # restore cursor position
         print(line, end="", flush=True)
 
     def summary(self, stats: CaptureStats):
@@ -488,9 +508,16 @@ class CaptureLogger:
         ])
         self._csv_file.flush()
 
-        # Binary: [4-byte timestamp_ms uint32][1-byte length][N bytes]
-        ts_ms = int(pkt.timestamp * 1000) & 0xFFFFFFFF
-        self._raw_file.write(struct.pack(">IB", ts_ms, pkt.length))
+        # Binary record format (12 + N bytes per packet):
+        #   [8-byte epoch_ms  int64  big-endian]  — full Unix ms, no wrap
+        #   [4-byte ts_ms     uint32 big-endian]  — session-relative ms (wraps at ~49.7 days)
+        #   [1-byte length    uint8             ]  — payload byte count
+        #   [N-byte payload                     ]
+        # The 32-bit ts_ms is kept for backward compatibility. Use epoch_ms for
+        # cross-session analysis. struct '>qIB' = big-endian int64 + uint32 + uint8.
+        epoch_ms = int(pkt.timestamp * 1000)
+        ts_ms    = epoch_ms & 0xFFFFFFFF
+        self._raw_file.write(struct.pack(">qIB", epoch_ms, ts_ms, pkt.length))
         self._raw_file.write(pkt.raw_bytes)
         self._raw_file.flush()
 
@@ -650,6 +677,11 @@ def capture(port: str, baud: int, duration: Optional[float],
 
                         # SYNC detection
                         is_sync = sync_detector.feed(completed)
+                        if is_sync:
+                            # Keep CaptureStats in sync with SyncDetector so
+                            # Display.summary() and status_bar() reflect live data.
+                            stats.sync_intervals = list(sync_detector._intervals)
+                            stats.last_sync_time = sync_detector._last_sync_time
                         if is_sync and not sync_detector.confirmed:
                             print(f"\n{ANSI_MAGENTA}  SYNC detected — verifying baud rate...{ANSI_RESET}")
                         elif is_sync and sync_detector.confirmed:

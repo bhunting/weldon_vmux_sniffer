@@ -211,13 +211,13 @@ typedef struct {
 
 ## Files in this project
 
+**Repository:** https://github.com/bhunting/weldon_vmux_sniffer
+
 | File | Description |
 |------|-------------|
-| `vmux_capture.py` | Python RS-485 bus capture and protocol analysis tool |
+| `vmux_capture.py` | Python RS-485 bus capture and protocol analysis tool (v2) |
 | `requirements.txt` | Python dependencies (pyserial) |
-| `vmux_capture_README.md` | Usage guide for the capture tool |
-| `vmux_bus_tap_schematic.html` | Interactive bus tap and isolation circuit schematic |
-| `vmux_replacement_architecture.html` | System architecture overview diagram |
+| `README.md` | Usage guide for the capture tool |
 | `agents.md` | This file — agent context and project state |
 
 ---
