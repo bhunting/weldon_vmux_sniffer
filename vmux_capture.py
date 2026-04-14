@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-vmux_capture.py — V-MUX RS-485 bus capture and analysis tool  v2
+vmux_capture.py — V-MUX RS-485 bus capture and analysis tool  v3
 DSD TECH SH-U11F adapter · Braun ambulance 2013 · Phase 1 bus analysis
 
-Changes from v1:
-  - scan_ports(): fixed FTDI VID detection operator-precedence bug
-  - detect_baud(): removed dead framing_errors variable; added Phase 3 note
-  - capture(): SyncDetector intervals now propagated to CaptureStats on every
-               SYNC event so Display.summary() and status_bar() show live data
-  - Display.status_bar(): uses ANSI cursor save/restore to avoid overwriting
-               packet output lines
-  - CaptureLogger.log(): binary format extended to 64-bit epoch_ms (no wrap);
-               32-bit session-relative ts_ms retained for backward compat
-  - README: added SH-U11F termination jumper location note
+Changes from v2 (engineering review):
+  F1 - Timestamp collapse: replaced single t_rx stamp for whole chunk with
+       per-byte interpolated timestamps (t_last - (n-1-i)*byte_time_s).
+       Prevents independent packets batched by OS from being merged.
+  F2 - Trailing packet stale flush: idle-gap flush now fires in the else
+       branch of the blocking read loop; SYNC packet displayed immediately
+       rather than waiting up to 4s for the next bus activity.
+  P1 - Windows timer resolution: removed time.sleep(0.001) (15ms OS floor).
+       Main loop now uses blocking ser.read(1) with timeout=gap_ms/2 seconds,
+       so the OS drives the wait without sleeping past the gap threshold.
+  P2 - detect_baud() efficiency: ser.read(64) replaced with
+       ser.read(ser.in_waiting or 1) to drain the OS buffer instantly.
+  S1 - global VMUX_IDLE_GAP_MS anti-pattern removed. gap_ms passed as an
+       explicit parameter through main() → capture() → PacketAssembler.
+  HW - Added 100ms settle delay after RTS/DTR=Low before clearing RX buffer,
+       with comment explaining the FTDI control-line transient risk.
+  8N1 assumption documented explicitly in Serial constructor comments.
 
 Usage:
     python vmux_capture.py --port COM3              # Windows
@@ -228,7 +235,9 @@ def detect_baud(port: str, timeout_per_baud: float = 6.0) -> Optional[int]:
             t_end = time.time() + timeout_per_baud
 
             while time.time() < t_end:
-                chunk = ser.read(64)
+                # Drain all bytes currently in the OS buffer instantly;
+                # fall back to a blocking read(1) so we don't busy-spin.
+                chunk = ser.read(ser.in_waiting or 1)
                 if chunk:
                     raw.extend(chunk)
 
@@ -600,16 +609,47 @@ class SyncDetector:
 
 
 # ─────────────────────────────────────────────
+#  Packet post-processing helper
+# ─────────────────────────────────────────────
+
+def _process_packet(pkt: VmuxPacket, pkt_num: int, stats: CaptureStats,
+                    sync_detector: "SyncDetector", display: "Display",
+                    logger: "CaptureLogger") -> None:
+    """Update stats, run SYNC detection, display, and log a completed packet."""
+    if not pkt.raw_bytes:
+        return
+
+    code = pkt.raw_bytes[0]
+    stats.message_counts[code] += 1
+    stats.unique_messages.add(code)
+
+    is_sync = sync_detector.feed(pkt)
+    if is_sync:
+        stats.sync_intervals = list(sync_detector._intervals)
+        stats.last_sync_time = sync_detector._last_sync_time
+    if is_sync and not sync_detector.confirmed:
+        print(f"\n{ANSI_MAGENTA}  SYNC detected — verifying baud rate...{ANSI_RESET}")
+    elif is_sync and sync_detector.confirmed:
+        verdict = sync_detector.baud_verdict()
+        if "OK" in verdict and pkt_num == 2:
+            print(f"\n{ANSI_GREEN}  Baud rate {verdict}{ANSI_RESET}\n")
+
+    display.packet(pkt, pkt_num, stats)
+    logger.log(pkt, pkt_num)
+
+
+# ─────────────────────────────────────────────
 #  Main capture loop
 # ─────────────────────────────────────────────
 
 def capture(port: str, baud: int, duration: Optional[float],
-            output_dir: str, verbose: bool, quiet: bool):
+            output_dir: str, verbose: bool, quiet: bool,
+            gap_ms: float = VMUX_IDLE_GAP_MS):
 
     display = Display(verbose=verbose, quiet=quiet)
     logger  = CaptureLogger(output_dir=output_dir)
     stats   = CaptureStats()
-    assembler = PacketAssembler(gap_threshold_ms=VMUX_IDLE_GAP_MS, baud=baud)
+    assembler = PacketAssembler(gap_threshold_ms=gap_ms, baud=baud)
     sync_detector = SyncDetector()
 
     print(f"\n{ANSI_CYAN}Logging to:{ANSI_RESET}")
@@ -621,11 +661,10 @@ def capture(port: str, baud: int, duration: Optional[float],
         ser = serial.Serial(
             port=port,
             baudrate=baud,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=0.05,             # Short timeout for responsive gap detection
-            rtscts=False,
+            bytesize=serial.EIGHTBITS,    # 8N1 assumed throughout; V-MUX protocol
+            parity=serial.PARITY_NONE,    # uses standard UART framing. If 9-bit
+            stopbits=serial.STOPBITS_ONE, # addressing is discovered on the bus,
+            rtscts=False,                 # revisit stopbits / parity settings.
             dsrdtr=False,
             xonxoff=False,
         )
@@ -634,69 +673,85 @@ def capture(port: str, baud: int, duration: Optional[float],
         print("Check the port name and that no other application is using it.")
         sys.exit(1)
 
-    # SH-U11F: disable RTS (don't accidentally drive DE high)
+    # SH-U11F: force DE/RE lines Low before any data flows.
+    # FTDI chips can briefly pulse RTS/DTR during USB enumeration. We set them
+    # explicitly and then wait 100ms for the line state to fully settle before
+    # clearing the buffer and entering the receive loop. Verify with an
+    # oscilloscope that the bus stays quiet during this window before the first
+    # live vehicle connection.
     ser.rts = False
     ser.dtr = False
+    time.sleep(0.10)           # let FTDI control lines settle
     ser.reset_input_buffer()
+
+    # Set blocking read timeout to half the gap threshold.
+    # This drives the OS wait (no time.sleep needed) and ensures the idle-flush
+    # check fires well before a full gap expires. On Windows the minimum kernel
+    # timer slice is ~15.6ms; using a pyserial timeout instead of time.sleep()
+    # avoids the 15ms floor that would exceed the 10ms gap threshold.
+    ser.timeout = (gap_ms / 2000.0)     # gap_ms/2 in seconds
+
+    # Pre-compute the physical byte duration for timestamp interpolation (F1).
+    # 8N1 = 10 bits per byte (1 start + 8 data + 1 stop).
+    byte_time_s = 10.0 / baud
 
     display.header(port, baud)
 
     pkt_num = 0
     t_start = time.time()
     t_last_status = t_start
-    status_interval = 1.0  # seconds between status bar refresh
+    status_interval = 1.0
 
     print(f"\n{ANSI_YELLOW}Waiting for bus activity...  (Ctrl+C to stop){ANSI_RESET}\n")
 
     try:
         while True:
-            # Check duration
-            elapsed = time.time() - t_start
-            if duration and elapsed >= duration:
+            if duration and (time.time() - t_start) >= duration:
                 break
 
-            # Read available bytes
-            waiting = ser.in_waiting
-            if waiting:
-                raw = ser.read(min(waiting, 256))
-                t_rx = time.time()
+            # Block until at least 1 byte arrives or timeout fires (half gap).
+            first = ser.read(1)
 
-                for b in raw:
+            if first:
+                # Timestamp the arrival of the LAST byte in the OS buffer — that
+                # is the byte that triggered the OS wakeup. We then interpolate
+                # backwards so earlier bytes in the same chunk get an earlier
+                # timestamp, preserving inter-packet gap detection even when the
+                # OS has batched multiple packets together.
+                t_last = time.time()
+                waiting = ser.in_waiting
+                rest    = ser.read(waiting) if waiting else b""
+                chunk   = first + rest
+                n       = len(chunk)
+
+                for i, byte_val in enumerate(chunk):
+                    # Bytes earlier in the chunk arrived before t_last.
+                    # Offset = (n-1-i) bytes back in time from the last byte.
+                    simulated_t = t_last - (n - 1 - i) * byte_time_s
                     stats.byte_count += 1
-                    completed = assembler.feed(b, t_rx)
+                    completed = assembler.feed(byte_val, simulated_t)
 
                     if completed:
                         pkt_num += 1
                         stats.packet_count += 1
-
-                        # Update stats
-                        if completed.raw_bytes:
-                            code = completed.raw_bytes[0]
-                            stats.message_counts[code] += 1
-                            stats.unique_messages.add(code)
-
-                        # SYNC detection
-                        is_sync = sync_detector.feed(completed)
-                        if is_sync:
-                            # Keep CaptureStats in sync with SyncDetector so
-                            # Display.summary() and status_bar() reflect live data.
-                            stats.sync_intervals = list(sync_detector._intervals)
-                            stats.last_sync_time = sync_detector._last_sync_time
-                        if is_sync and not sync_detector.confirmed:
-                            print(f"\n{ANSI_MAGENTA}  SYNC detected — verifying baud rate...{ANSI_RESET}")
-                        elif is_sync and sync_detector.confirmed:
-                            verdict = sync_detector.baud_verdict()
-                            if "OK" in verdict and pkt_num == 2:
-                                print(f"\n{ANSI_GREEN}  Baud rate {verdict}{ANSI_RESET}\n")
-
-                        # Display and log
-                        display.packet(completed, pkt_num, stats)
-                        logger.log(completed, pkt_num)
+                        _process_packet(completed, pkt_num, stats,
+                                        sync_detector, display, logger)
 
             else:
-                time.sleep(0.001)  # Yield CPU when idle
+                # Timeout — no data received. Check for an idle-gap flush (F2).
+                # If the bus has been silent longer than gap_ms since the last
+                # byte, flush the assembler buffer as a completed packet.
+                if assembler._buffer and assembler._last_byte_time is not None:
+                    idle_ms = (time.time() - assembler._last_byte_time) * 1000.0
+                    if idle_ms >= gap_ms:
+                        completed = assembler.flush()
+                        if completed and completed.raw_bytes:
+                            pkt_num += 1
+                            stats.packet_count += 1
+                            _process_packet(completed, pkt_num, stats,
+                                            sync_detector, display, logger)
 
-            # Status bar refresh
+            # Status bar refresh (1s cadence)
             if time.time() - t_last_status >= status_interval:
                 if not quiet:
                     display.status_bar(stats, baud)
@@ -706,19 +761,17 @@ def capture(port: str, baud: int, duration: Optional[float],
         print(f"\n\n{ANSI_YELLOW}Capture stopped by user.{ANSI_RESET}")
 
     finally:
-        # Flush any partial packet
         final_pkt = assembler.flush()
         if final_pkt and final_pkt.raw_bytes:
             pkt_num += 1
             stats.packet_count += 1
-            display.packet(final_pkt, pkt_num, stats)
-            logger.log(final_pkt, pkt_num)
+            _process_packet(final_pkt, pkt_num, stats,
+                            sync_detector, display, logger)
 
         ser.close()
         logger.close()
         display.summary(stats)
 
-        # Final baud verdict
         verdict = sync_detector.baud_verdict()
         print(f"\n{ANSI_CYAN}Baud rate verdict:{ANSI_RESET} {verdict}")
         print(f"\n{ANSI_GREEN}Files saved:{ANSI_RESET}")
@@ -778,8 +831,6 @@ def build_message_map(csv_path: str):
 # ─────────────────────────────────────────────
 
 def main():
-    global VMUX_IDLE_GAP_MS  # noqa: PLW0603 — may be overridden by --gap
-
     parser = argparse.ArgumentParser(
         description="V-MUX RS-485 bus capture tool — DSD TECH SH-U11F",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -817,7 +868,7 @@ Examples:
     args = parser.parse_args()
 
     # Override gap threshold if user specified --gap
-    VMUX_IDLE_GAP_MS = args.gap
+    gap_ms = args.gap
 
     # Message map analysis mode
     if args.map:
@@ -859,6 +910,7 @@ Examples:
         output_dir=args.output,
         verbose=args.verbose,
         quiet=args.quiet,
+        gap_ms=gap_ms,
     )
 
 

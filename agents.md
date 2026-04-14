@@ -106,15 +106,27 @@ You are assisting an experienced professional embedded systems engineer on this 
 ## Software
 
 ### Capture tool
-- **File:** `vmux_capture.py`
+- **File:** `vmux_capture.py` — current version: **v3**
 - **Dependency:** `pyserial` (`pip install -r requirements.txt`)
 - **Key classes:**
-  - `PacketAssembler` — idle-gap framing, byte-by-byte feed, emits `VmuxPacket`
-  - `SyncDetector` — detects SYNC period to confirm baud rate
-  - `CaptureLogger` — writes CSV + binary log per session
-  - `Display` — colour-coded terminal output (magenta=SYNC, green=known, yellow=unknown)
+  - `PacketAssembler` — idle-gap framing, byte-by-byte feed with interpolated timestamps, emits `VmuxPacket`
+  - `SyncDetector` — detects SYNC period to confirm baud rate; intervals propagated to `CaptureStats`
+  - `CaptureLogger` — writes CSV + binary log (64-bit epoch_ms) per session
+  - `Display` — colour-coded terminal output (magenta=SYNC, green=known, yellow=unknown); ANSI cursor save/restore on status bar
+  - `_process_packet()` — helper: stats update, SYNC detection, display, log for a completed packet
 - **Output:** `vmux_capture_YYYYMMDD_HHMMSS.csv` + `.bin` per session
 - **Baud detection:** `--detect` flag tries 9600 / 19200 / 38400 / 57600 / 115200
+
+### Capture tool — v3 key implementation decisions
+| Issue | Solution |
+|-------|----------|
+| Timestamp collapse on OS-buffered chunks | Per-byte interpolated timestamps: `t_last - (n-1-i) * byte_time_s` |
+| SYNC packet displayed 4s late | Idle-gap flush fires in `else` branch of blocking read loop |
+| Windows 15.6ms timer floor with `sleep(0.001)` | `ser.timeout = gap_ms/2000.0`; main loop uses blocking `ser.read(1)` |
+| `detect_baud` read inefficiency | `ser.read(ser.in_waiting or 1)` drains buffer instantly |
+| `global VMUX_IDLE_GAP_MS` anti-pattern | `gap_ms` passed as explicit param: `main()→capture()→PacketAssembler` |
+| FTDI RTS/DTR transient on port open | 100ms settle delay after `rts=False/dtr=False` before `reset_input_buffer()` |
+| 8N1 assumption undocumented | Explicit comment in `Serial()` constructor; flag for 9-bit review if needed |
 
 ### Common commands
 ```bash
@@ -123,6 +135,17 @@ python vmux_capture.py --port COM3 --detect            # auto baud
 python vmux_capture.py --port COM3 --baud 19200        # capture
 python vmux_capture.py --map vmux_capture_*.csv        # build message map
 ```
+
+### Phase 1 capture session procedure
+1. Confirm SH-U11F R120 jumper absent (120Ω off)
+2. Connect A+ → J1 pin 2, B− → J1 pin 3, GND → J1 pin 1 (not chassis)
+3. Oscilloscope CH1 on A+, CH2 on B−, both clips to J1 pin 1; Math=CH1−CH2
+4. Power vehicle, verify SYNC burst visible on scope every ~4s
+5. Run `--scan` to identify adapter port
+6. Run `--detect` to confirm baud rate (SYNC interval should be 3.5–4.5s)
+7. Run capture; operate each vehicle function one at a time; log ~60s per function
+8. Run `--map` against captured CSV to build annotated message table
+9. Update `VMUX_KNOWN_COMMANDS` dict with confirmed mappings
 
 ---
 
@@ -215,10 +238,26 @@ typedef struct {
 
 | File | Description |
 |------|-------------|
-| `vmux_capture.py` | Python RS-485 bus capture and protocol analysis tool (v2) |
+| `vmux_capture.py` | Python RS-485 bus capture and protocol analysis tool (**v3**) |
 | `requirements.txt` | Python dependencies (pyserial) |
 | `README.md` | Usage guide for the capture tool |
 | `agents.md` | This file — agent context and project state |
+
+---
+
+## Phase 1 open items — next actions
+
+When the SH-U11F adapter arrives and the first vehicle capture session runs, the following are the immediate outstanding unknowns that must be resolved before Phase 2 hardware design can begin:
+
+| Item | Unknown | How to resolve |
+|------|---------|----------------|
+| Baud rate | 9600 / 19200 / 38400 / other | `--detect` + SYNC interval confirmation on scope |
+| Packet framing | Exact byte count per message; whether checksum byte exists | Capture SYNC (known periodic packet) and count bytes |
+| Message code space | How many codes are in use on this specific vehicle | Full function-by-function capture session |
+| Node count | How many nodes respond on the bus | Observe Ping/Reply traffic in capture output |
+| SYNC code byte | Confirm 0x50 or discover actual value | First capture; SYNC is the most frequent packet |
+| Bus baud — 9-bit? | Standard 8N1 assumed; some V-MUX versions use 9-bit addressing | If framing errors occur at all baud rates, try 8N2/8E1 |
+| Checksum algorithm | Unknown — last byte of packet may be XOR, CRC8, or sum | Capture same command multiple times; compare trailing byte |
 
 ---
 
