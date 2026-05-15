@@ -3,11 +3,66 @@
 RS-485 bus sniffer and protocol analyser for Braun ambulance V-MUX systems.
 Designed for use with the **DSD TECH SH-U11F** isolated USB-RS485 adapter.
 
+## Files
+
+| File | Description |
+|------|-------------|
+| `vmux_capture.py` | RS-485 bus capture, packet framing, protocol analysis |
+| `vmux_generator.py` | Test message generator for bench validation without the vehicle |
+| `requirements.txt` | Shared dependency: `pyserial` |
+
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 ```
+
+---
+
+## Bench validation (no vehicle required)
+
+Use `vmux_generator.py` on a second laptop to simulate V-MUX bus traffic and
+validate the capture tool before the first vehicle connection.
+
+**Physical connection:**
+```
+GENERATOR LAPTOP          RS-485 twisted pair        CAPTURE LAPTOP
+vmux_generator.py    A+ ──────────────────── A+    vmux_capture.py
+SH-U11F              B- ──────────────────── B-    SH-U11F
+R120 jumper: ABSENT  GND─────────────────── GND    R120 jumper: ABSENT
+```
+Both R120 (120Ω) termination jumpers must be absent. Keep bench cable under 1m.
+
+**Run order — start capture first, then generator:**
+```bash
+# Capture laptop (COM3):
+python vmux_capture.py --port COM3 --baud 19200
+
+# Generator laptop (COM4) — separate terminal:
+python vmux_generator.py --port COM4 --baud 19200 --scenario full
+```
+
+**Scenarios:**
+
+| Scenario | Duration | Tests |
+|----------|----------|-------|
+| `idle` | 30s | SYNC timing, baud detection |
+| `basic` | 90s | Packet framing, known message decode |
+| `burst` | 45s | Timestamp interpolation, idle flush |
+| `multinode` | 60s | Node byte parsing |
+| `unknown` | 45s | Unknown code yellow-highlight |
+| `full` | ~3 min | All of the above in sequence |
+| `interactive` | ∞ | Manual single-packet injection |
+
+**Expected output on capture laptop during `full`:**
+- Within 5s: SYNC packet in magenta
+- Within 14s: `SYNC CONFIRMED OK (avg=4.xx s)`
+- Known commands: green; unknown codes: yellow
+- `--map` shows all generator codes with correct counts
+
+**If capture shows only garbage:** swap A+/B− on one adapter (polarity inversion).
+
+---
 
 ## Quick start
 

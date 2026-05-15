@@ -128,15 +128,85 @@ You are assisting an experienced professional embedded systems engineer on this 
 | FTDI RTS/DTR transient on port open | 100ms settle delay after `rts=False/dtr=False` before `reset_input_buffer()` |
 | 8N1 assumption undocumented | Explicit comment in `Serial()` constructor; flag for 9-bit review if needed |
 
-### Common commands
+### Test message generator
+- **File:** `vmux_generator.py` — current version: **v1**
+- **Dependency:** `pyserial` (same `requirements.txt`)
+- **Purpose:** Simulate realistic V-MUX bus traffic on a bench RS-485 link to validate `vmux_capture.py` without connecting to the vehicle
+- **Runs on:** Separate laptop with its own SH-U11F (or any USB-RS485 adapter)
+
+**Key classes:**
+
+| Class | Role |
+|-------|------|
+| `BusTx` | Serial port wrapper with RS-485 direction control, TX shift-register wait, per-packet logging |
+| `SyncScheduler` | Fires SYNC from Node 1 every ~4s with ±50ms jitter; call `tick()` frequently in scenario loops |
+
+**Packet format (hypothesis, matches capture tool):**
+```
+[msg_code: 1B][state: 1B (0x00=OFF, 0x01=ON)][node: 1B][xor_checksum: 1B]
+```
+Checksum = `msg_code XOR state XOR node`
+
+**Scenarios:**
+
+| Scenario | Duration | What it tests |
+|----------|----------|---------------|
+| `idle` | 30s | SYNC only — baud detection, SyncDetector interval |
+| `basic` | 90s | All known commands ON/OFF — packet framing, decode |
+| `burst` | 45s | Sub-threshold intra-burst gaps — F1 timestamp interpolation, F2 idle flush |
+| `multinode` | 60s | Nodes 1/2/3 interleaved — node byte parsing |
+| `unknown` | 45s | Mixed known/unknown codes — yellow-highlight path in Display |
+| `full` | ~3 min | All scenarios in sequence — complete validation run |
+| `interactive` | ∞ | Manual packet injection with background SYNC |
+
+**Direction control:**
+- SH-U11F uses FTDI CBUS TXDEN — DE asserted automatically in hardware; no RTS manipulation needed
+- Generic adapters without auto-DE: use `--manual-de` flag (sets RTS=High before write, Low after shift-register wait)
+
+**Common commands:**
+```bash
+python vmux_generator.py --scan
+python vmux_generator.py --port COM4 --baud 19200 --scenario idle
+python vmux_generator.py --port COM4 --baud 19200 --scenario full
+python vmux_generator.py --port COM4 --baud 19200 --scenario interactive
+python vmux_generator.py --port COM4 --baud 19200 --scenario burst --gap 5
+```
+
+### Physical bench connection (generator ↔ capture)
+```
+GENERATOR LAPTOP                        CAPTURE LAPTOP
+vmux_generator.py                       vmux_capture.py
+     │                                       │
+SH-U11F (USB-RS485)                    SH-U11F (USB-RS485)
+R120 jumper: ABSENT                    R120 jumper: ABSENT
+     │                                       │
+┌────┴─────────────────────────────────────┴────┐
+│  A+  ─────────────────────────────────── A+   │
+│  B-  ─────────────────────────────────── B-   │  RS-485 twisted pair
+│ GND  ──────────────────────────────────  GND  │  <1m bench cable
+└───────────────────────────────────────────────┘
+```
+
+**Runtime configuration checklist:**
+1. Both R120 jumpers absent on both adapters
+2. Baud rate identical on both tools (`--baud 19200`)
+3. Start capture tool first, then generator
+4. Each tool uses a different COM port (run `--scan` on each laptop)
+5. If capture shows only garbage: swap A+/B− on one adapter (polarity inversion)
+
+**Expected capture tool output during `full` scenario:**
+- Within 5s: first SYNC packet (magenta)
+- Within 14s: `SYNC CONFIRMED OK (avg=4.xx s)` — baud rate verified
+- All known codes appear green; unknown codes appear yellow
+- `--map` output shows all transmitted codes with correct frequencies
+
+### Common commands — capture tool
 ```bash
 python vmux_capture.py --scan                          # find port
 python vmux_capture.py --port COM3 --detect            # auto baud
 python vmux_capture.py --port COM3 --baud 19200        # capture
 python vmux_capture.py --map vmux_capture_*.csv        # build message map
 ```
-
-### Phase 1 capture session procedure
 1. Confirm SH-U11F R120 jumper absent (120Ω off)
 2. Connect A+ → J1 pin 2, B− → J1 pin 3, GND → J1 pin 1 (not chassis)
 3. Oscilloscope CH1 on A+, CH2 on B−, both clips to J1 pin 1; Math=CH1−CH2
@@ -239,7 +309,8 @@ typedef struct {
 | File | Description |
 |------|-------------|
 | `vmux_capture.py` | Python RS-485 bus capture and protocol analysis tool (**v3**) |
-| `requirements.txt` | Python dependencies (pyserial) |
+| `vmux_generator.py` | Python RS-485 test message generator for bench validation (**v1**) |
+| `requirements.txt` | Python dependencies (pyserial) — shared by both tools |
 | `README.md` | Usage guide for the capture tool |
 | `agents.md` | This file — agent context and project state |
 
