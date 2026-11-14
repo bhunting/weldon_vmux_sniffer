@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+vmux_capture_*.csv
+vmux_capture_*.bin
+docs/reference/*.pdf

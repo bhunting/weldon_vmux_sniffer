@@ -188,10 +188,11 @@ class BusTx:
     """
 
     def __init__(self, port: str, baud: int, manual_de: bool = False,
-                 quiet: bool = False):
-        self.baud      = baud
-        self.manual_de = manual_de
-        self.quiet     = quiet
+                 quiet: bool = False, min_gap_ms: float = VMUX_MIN_GAP_MS):
+        self.baud       = baud
+        self.manual_de  = manual_de
+        self.quiet      = quiet
+        self.min_gap_ms = min_gap_ms   # default idle gap before each packet (--gap)
         self._pkt_count = 0
         self._byte_time_s = 10.0 / baud   # 8N1
 
@@ -220,14 +221,16 @@ class BusTx:
         self._ser.reset_output_buffer()
 
     def send(self, pkt: bytes, label: str = "",
-             gap_before_ms: float = VMUX_MIN_GAP_MS) -> None:
+             gap_before_ms: Optional[float] = None) -> None:
         """
         Transmit one packet onto the RS-485 bus.
-        Enforces a minimum idle gap before transmission.
+        gap_before_ms=None uses self.min_gap_ms (the --gap setting). Scenarios
+        that deliberately need a shorter gap (burst test) pass an explicit value.
         Waits for the full packet to clear the UART shift register before returning,
         so the caller can immediately enforce the next gap without a race.
         """
-        # Enforce minimum inter-packet gap
+        if gap_before_ms is None:
+            gap_before_ms = self.min_gap_ms
         if gap_before_ms > 0:
             time.sleep(gap_before_ms / 1000.0)
 
@@ -301,7 +304,7 @@ class SyncScheduler:
         now = time.time()
         if now >= self._next_t:
             pkt = sync_packet(NODE_MASTER)
-            self._tx.send(pkt, label="SYNC (Node 1)", gap_before_ms=VMUX_MIN_GAP_MS)
+            self._tx.send(pkt, label="SYNC (Node 1)")
             jitter = random.uniform(-self._jitter, self._jitter)
             self._next_t = now + self._interval + jitter
             return True
@@ -383,7 +386,7 @@ def scenario_basic(tx: BusTx, duration: float) -> None:
 
             # ON
             tx.send(build_packet(code, STATE_ON, node),
-                    label=f"{name} ON", gap_before_ms=VMUX_MIN_GAP_MS)
+                    label=f"{name} ON")
             if sync.tick(): continue
 
             time.sleep(random.uniform(0.5, 2.0))   # hold time
@@ -391,7 +394,7 @@ def scenario_basic(tx: BusTx, duration: float) -> None:
 
             # OFF
             tx.send(build_packet(code, STATE_OFF, node),
-                    label=f"{name} OFF", gap_before_ms=VMUX_MIN_GAP_MS)
+                    label=f"{name} OFF")
             if sync.tick(): continue
 
             cmd_idx = (cmd_idx + 1) % len(commands)
@@ -419,7 +422,7 @@ def scenario_burst(tx: BusTx, duration: float) -> None:
     print(f"\n{ANSI_CYAN}Scenario: BURST — stress gap-framing for {duration:.0f}s{ANSI_RESET}")
     print(f"{ANSI_DIM}Tests: F1 timestamp interpolation, intra-burst framing, idle flush (F2){ANSI_RESET}")
     print(f"{ANSI_DIM}Intra-burst gap = {VMUX_INTER_MSG_MS}ms  (< {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}")
-    print(f"{ANSI_DIM}Inter-burst gap = {VMUX_MIN_GAP_MS}ms  (> {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}\n")
+    print(f"{ANSI_DIM}Inter-burst gap = {tx.min_gap_ms}ms  (> {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}\n")
 
     sync  = SyncScheduler(tx)
     t_end = time.time() + duration
@@ -450,7 +453,7 @@ def scenario_burst(tx: BusTx, duration: float) -> None:
 
         # Fire burst ON packets with sub-threshold gap (intra-burst)
         for i, (code, state, node, label) in enumerate(burst_commands):
-            gap = VMUX_MIN_GAP_MS if i == 0 else VMUX_INTER_MSG_MS
+            gap = None if i == 0 else VMUX_INTER_MSG_MS   # None -> tx.min_gap_ms
             tx.send(build_packet(code, state, node), label=label,
                     gap_before_ms=gap)
             if sync.tick(): break
@@ -461,7 +464,7 @@ def scenario_burst(tx: BusTx, duration: float) -> None:
 
         # Burst OFF
         for i, (code, state, node, label) in enumerate(burst_off):
-            gap = VMUX_MIN_GAP_MS if i == 0 else VMUX_INTER_MSG_MS
+            gap = None if i == 0 else VMUX_INTER_MSG_MS   # None -> tx.min_gap_ms
             tx.send(build_packet(code, state, node), label=label,
                     gap_before_ms=gap)
 
@@ -533,8 +536,7 @@ def scenario_multinode(tx: BusTx, duration: float) -> None:
             state_str = "ON" if state else "OFF"
 
             tx.send(build_packet(code, state, node),
-                    label=f"{name} {state_str} (node {node})",
-                    gap_before_ms=VMUX_MIN_GAP_MS)
+                    label=f"{name} {state_str} (node {node})")
 
             indices[node] = (idx + 1) % len(seq)
             time.sleep(random.uniform(0.15, 0.40))
@@ -586,8 +588,7 @@ def scenario_unknown(tx: BusTx, duration: float) -> None:
         state_str = "ON" if state else "OFF"
 
         tx.send(build_packet(code, state, node),
-                label=f"{name} {state_str}",
-                gap_before_ms=VMUX_MIN_GAP_MS)
+                label=f"{name} {state_str}")
         idx += 1
         time.sleep(random.uniform(0.2, 0.6))
 
@@ -675,7 +676,7 @@ def scenario_interactive(tx: BusTx) -> None:
             break
 
         elif cmd == "sync":
-            tx.send(sync_packet(), label="SYNC (manual)", gap_before_ms=VMUX_MIN_GAP_MS)
+            tx.send(sync_packet(), label="SYNC (manual)")
 
         elif cmd == "list":
             print(f"\n{'Code':<8} {'Label'}")
@@ -695,8 +696,7 @@ def scenario_interactive(tx: BusTx) -> None:
 
                 pkt  = build_packet(code, state, node)
                 name = MSG_NAMES.get(code, f"UNKNOWN_0x{code:02X}")
-                tx.send(pkt, label=f"{name} {'ON' if state else 'OFF'} (node {node})",
-                        gap_before_ms=VMUX_MIN_GAP_MS)
+                tx.send(pkt, label=f"{name} {'ON' if state else 'OFF'} (node {node})")
 
             except (ValueError, IndexError):
                 print(f"{ANSI_RED}Syntax: <hex_code> <on|off> [node]{ANSI_RESET}")
@@ -768,18 +768,16 @@ Physical connection:
         print(f"\n{ANSI_RED}Error: --port required. Use --scan to list ports.{ANSI_RESET}\n")
         sys.exit(1)
 
-    global VMUX_MIN_GAP_MS
-    VMUX_MIN_GAP_MS = args.gap
-
     print(f"\n{ANSI_BOLD}V-MUX Generator{ANSI_RESET}")
     print(f"  Port:     {args.port}")
     print(f"  Baud:     {args.baud:,}")
     print(f"  Scenario: {args.scenario}")
-    print(f"  Gap:      {VMUX_MIN_GAP_MS}ms min inter-packet")
+    print(f"  Gap:      {args.gap}ms min inter-packet")
     print(f"  Manual DE:{args.manual_de}")
 
     tx = BusTx(port=args.port, baud=args.baud,
-               manual_de=args.manual_de, quiet=args.quiet)
+               manual_de=args.manual_de, quiet=args.quiet,
+               min_gap_ms=args.gap)
 
     default_durations = {
         "idle":      30.0,

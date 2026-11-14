@@ -35,6 +35,7 @@ You are assisting an experienced professional embedded systems engineer on this 
   - Pin 2: BUS A (+) — VMUX_A
   - Pin 3: BUS B (−) — VMUX_B
   - Pin 4: +12V vehicle supply
+  - **UNVERIFIED:** pinout and part number above were not confirmed against the user's 3-pin/4-pin wiring diagrams. Verify against `docs/reference/` before any physical connection.
 
 ### V-MUX protocol (documented behaviour)
 - **SYNC message:** Node 1 broadcasts every ~4 seconds; coordinates flash patterns and confirms network health
@@ -42,11 +43,12 @@ You are assisting an experienced professional embedded systems engineer on this 
 - **Message structure (hypothesis):** `[msg_code: 1 byte][state: 1 byte (0x00=OFF / 0x01=ON)][node: 1 byte][...][checksum?]`
 - **Packet framing:** Idle-gap based — no length prefix or explicit delimiter
 - **Packet boundary threshold:** ~10 ms idle gap (tunable)
-- **Direction control:** Hardware auto (CBUS TXDEN on FT232 → DE pin on RS-485 transceiver)
+- **Direction control (SH-U11F):** UNVERIFIED. FT232 CBUS TXDEN is a plausible implementation, but the SH-U11F user guide does not document direction control. Passive capture does not depend on it. Confirm empirically (scope on A/B while transmitting from generator) before relying on it.
 - **Bus collisions (BC counter):** Any incrementing BC count = serious fault; vehicle must not return to service
 - **Diagnostics tool:** Weldon V-MUX Diagnostics v1.4.2 (Windows only); uses `.dav` database files mapping numeric codes to human labels
 
-### Known message codes (partial — from Weldon documentation)
+### Message codes — PLACEHOLDERS, NOT from Weldon documentation
+**These codes are working assumptions used by the capture tool and generator for display/testing. None are confirmed against the vehicle. Replace with captured data in Phase 1.**
 | Code | Label |
 |------|-------|
 | 0x04 | Reverse |
@@ -83,13 +85,14 @@ You are assisting an experienced professional embedded systems engineer on this 
   - No termination resistors anywhere on bus-side
   - Two separate ground planes (GND and GND_ISO) — never connect
   - DIR pin default Low = receive-only at power-on
-  - TX turnaround <1 µs; use STM32F405 hardware DE pin (USART `DEM` bit)
+  - **DE strategy OPEN:** an earlier version of this file claimed the STM32F405 USART has a hardware DE (`DEM`) feature. This is almost certainly wrong — RS-485 driver-enable hardware first appeared in F0/F3-generation USARTs. Verify in RM0090. Options: (a) GPIO DE driven from TC interrupt (TX-complete) — acceptable at V-MUX baud rates; (b) auto-direction RS-485 transceiver; (c) change MCU family (G4/L4/H7 have DEM/DEAT/DEDT).
 
 ### USB-RS485 adapter (Phase 1 capture)
 - **Device:** DSD TECH SH-U11F isolated USB to RS485/RS422 converter
-- **Chip:** FTDI FT232RL (genuine)
-- **Isolation:** Yes — ADI galvanic isolator between USB and RS-485 sides
-- **Termination:** 120Ω jumper-selectable — **must be removed/disabled before connecting to V-MUX bus**
+- **Chip:** FTDI-based (exact part not confirmed)
+- **Isolation:** advertised as isolated; isolation voltage and isolator part not confirmed from the user guide
+- **Termination:** 120Ω is a jumper, default disabled (per user guide); shell is detachable. Jumper location not documented — **confirm disabled before connecting to V-MUX bus**
+- **FTDI latency timer:** driver default is 16 ms, which batches reads and defeats ~10 ms gap detection. **Set to 1 ms** (Windows: Device Manager → port Advanced; Linux: `/sys/bus/usb-serial/devices/ttyUSBx/latency_timer`). Per-byte timestamps in the capture tool are interpolated, so inter-packet gaps inside one batched chunk are lost.
 - **Baud range:** 300 bps to 3 Mbps
 - **OS:** Windows / Linux / Mac (FTDI VCP driver)
 - **Connection:** RTS=Low, DTR=Low (never drive the bus); A+ to J1 pin 2, B− to J1 pin 3, GND to J1 pin 1
@@ -153,15 +156,14 @@ Checksum = `msg_code XOR state XOR node`
 |----------|----------|---------------|
 | `idle` | 30s | SYNC only — baud detection, SyncDetector interval |
 | `basic` | 90s | All known commands ON/OFF — packet framing, decode |
-| `burst` | 45s | Sub-threshold intra-burst gaps — F1 timestamp interpolation, F2 idle flush |
+| `burst` | 45s | Back-to-back messages with short inter-message gaps. **Expected result not yet defined** (split vs merge depends on gap vs `--gap`); define and add a just-above-threshold scenario |
 | `multinode` | 60s | Nodes 1/2/3 interleaved — node byte parsing |
 | `unknown` | 45s | Mixed known/unknown codes — yellow-highlight path in Display |
 | `full` | ~3 min | All scenarios in sequence — complete validation run |
 | `interactive` | ∞ | Manual packet injection with background SYNC |
 
 **Direction control:**
-- SH-U11F uses FTDI CBUS TXDEN — DE asserted automatically in hardware; no RTS manipulation needed
-- Generic adapters without auto-DE: use `--manual-de` flag (sets RTS=High before write, Low after shift-register wait)
+- SH-U11F direction control is not documented (see above). Default assumption: automatic; if the generator's packets do not appear on the bus, try `--manual-de` (RTS=High before write, Low after shift-register wait) and check on a scope.
 
 **Common commands:**
 ```bash
@@ -207,6 +209,8 @@ python vmux_capture.py --port COM3 --detect            # auto baud
 python vmux_capture.py --port COM3 --baud 19200        # capture
 python vmux_capture.py --map vmux_capture_*.csv        # build message map
 ```
+
+### Phase 1 vehicle capture procedure
 1. Confirm SH-U11F R120 jumper absent (120Ω off)
 2. Connect A+ → J1 pin 2, B− → J1 pin 3, GND → J1 pin 1 (not chassis)
 3. Oscilloscope CH1 on A+, CH2 on B−, both clips to J1 pin 1; Math=CH1−CH2
@@ -294,7 +298,7 @@ typedef struct {
 
 - **No termination resistors** on the V-MUX bus under any circumstances
 - **Galvanic isolation** required between vehicle RS-485 bus GND and MCU/laptop GND
-- **Hardware DE pin** must be used for RS-485 direction control — no GPIO toggling in ISR
+- **RS-485 direction control** must be deterministic with default receive; strategy on F4 is an open decision (see bus tap section)
 - **DIR default Low** (receive-only) at all power-on and reset states
 - **Passive tap only** during Phase 1 — the adapter must never drive the bus
 - **SYNC monitoring** required in firmware — `VM_OUT_OF_NETWORK` from any node = fault

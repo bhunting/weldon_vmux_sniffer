@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V-MUX Bus Tap & Isolation Circuit</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --bg2: #161b22;
+    --bg3: #1c2128;
+    --grid: #1e2530;
+    --wire: #c8d0da;
+    --wire-dim: #4a5568;
+    --comp: #e2e8f0;
+    --label: #94a3b8;
+    --value: #64b5f6;
+    --ref: #f6ad55;
+    --net-a: #68d391;
+    --net-b: #fc8181;
+    --net-gnd: #a0aec0;
+    --net-pwr: #fbd38d;
+    --net-mcu: #b794f4;
+    --border: #2d3748;
+    --highlight: #2563eb;
+    --accent: #3b82f6;
+    --font-mono: 'Courier New', monospace;
+    --font-sans: 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--comp);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .title-block { display: flex; flex-direction: column; gap: 2px; }
+  .title-block h1 { font-size: 14px; font-weight: 600; color: var(--comp); font-family: var(--font-mono); letter-spacing: 0.05em; }
+  .title-block p  { font-size: 11px; color: var(--label); font-family: var(--font-mono); }
+
+  .meta { display: flex; gap: 20px; font-family: var(--font-mono); font-size: 11px; color: var(--label); }
+  .meta span b { color: var(--value); }
+
+  .legend {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 8px 24px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .legend-label { font-size: 10px; color: var(--label); font-family: var(--font-mono); margin-right: 4px; }
+  .net-pill {
+    display: flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; font-family: var(--font-mono);
+    border: 1px solid;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .net-pill:hover { opacity: 0.75; }
+  .net-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+  .schematic-wrap {
+    overflow-x: auto;
+    padding: 16px 24px;
+  }
+
+  svg {
+    display: block;
+    min-width: 900px;
+    font-family: var(--font-mono);
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: var(--bg2);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--comp);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 999;
+    max-width: 220px;
+    line-height: 1.6;
+  }
+  .tooltip.show { opacity: 1; }
+  .tooltip b { color: var(--value); display: block; margin-bottom: 2px; }
+  .tooltip .part { color: var(--ref); }
+  .tooltip .note { color: var(--label); font-size: 10px; margin-top: 4px; }
+
+  .notes-panel {
+    margin: 0 24px 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .note-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+  .note-card h3 {
+    font-size: 11px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  .note-card ul { list-style: none; }
+  .note-card li {
+    font-size: 11px;
+    color: var(--label);
+    font-family: var(--font-mono);
+    padding: 2px 0;
+    display: flex;
+    gap: 6px;
+  }
+  .note-card li::before { content: '▸'; color: var(--accent); flex-shrink: 0; }
+  .note-card li b { color: var(--comp); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-block">
+    <h1>V-MUX BUS TAP &amp; GALVANIC ISOLATION INTERFACE</h1>
+    <p>Braun Ambulance 2013 · Weldon V-MUX RS-485 Network · Replacement Controller Interface</p>
+  </div>
+  <div class="meta">
+    <span>Sheet <b>1/1</b></span>
+    <span>Rev <b>A</b></span>
+    <span>Scale <b>NTS</b></span>
+  </div>
+</header>
+
+<div class="legend">
+  <span class="legend-label">NET:</span>
+  <div class="net-pill" style="color:#68d391;border-color:#68d391;background:#0d2018">
+    <div class="net-dot" style="background:#68d391"></div>VMUX_A (+)
+  </div>
+  <div class="net-pill" style="color:#fc8181;border-color:#fc8181;background:#200d0d">
+    <div class="net-dot" style="background:#fc8181"></div>VMUX_B (−)
+  </div>
+  <div class="net-pill" style="color:#fbd38d;border-color:#fbd38d;background:#1e1608">
+    <div class="net-dot" style="background:#fbd38d"></div>+12V / +5V
+  </div>
+  <div class="net-pill" style="color:#a0aec0;border-color:#a0aec0;background:#151a20">
+    <div class="net-dot" style="background:#a0aec0"></div>GND
+  </div>
+  <div class="net-pill" style="color:#b794f4;border-color:#b794f4;background:#160d20">
+    <div class="net-dot" style="background:#b794f4"></div>MCU signals
+  </div>
+</div>
+
+<div class="schematic-wrap">
+<svg id="sch" viewBox="0 0 1100 680" width="100%" style="background:#0e1117">
+
+<defs>
+  <!-- Grid pattern -->
+  <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+    <path d="M20 0L0 0L0 20" fill="none" stroke="#1a2030" stroke-width="0.5"/>
+  </pattern>
+  <!-- Arrow marker -->
+  <marker id="arr" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+    <path d="M1 1L6 4L1 7" fill="none" stroke="#c8d0da" stroke-width="1.2"/>
+  </marker>
+  <marker id="arr-g" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+    <path d="M1 1L6 4L1 7" fill="none" stroke="#68d391" stroke-width="1.2"/>
+  </marker>
+  <marker id="arr-r" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+    <path d="M1 1L6 4L1 7" fill="none" stroke="#fc8181" stroke-width="1.2"/>
+  </marker>
+  <marker id="arr-p" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+    <path d="M1 1L6 4L1 7" fill="none" stroke="#b794f4" stroke-width="1.2"/>
+  </marker>
+</defs>
+
+<!-- Grid background -->
+<rect width="1100" height="680" fill="url(#grid)"/>
+<!-- Border -->
+<rect x="4" y="4" width="1092" height="672" fill="none" stroke="#2d3748" stroke-width="1"/>
+
+<!-- ════════════════════════════════════════════
+     SECTION LABELS
+════════════════════════════════════════════ -->
+<!-- Section 1: Vehicle bus -->
+<rect x="12" y="12" width="200" height="650" rx="3" fill="none" stroke="#2d3748" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="112" y="28" text-anchor="middle" font-size="9" fill="#4a5568" letter-spacing="0.1em">VEHICLE V-MUX BUS</text>
+
+<!-- Section 2: Protection -->
+<rect x="220" y="12" width="180" height="650" rx="3" fill="none" stroke="#2d3748" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="310" y="28" text-anchor="middle" font-size="9" fill="#4a5568" letter-spacing="0.1em">BUS PROTECTION</text>
+
+<!-- Section 3: Isolation -->
+<rect x="408" y="12" width="200" height="650" rx="3" fill="none" stroke="#2d3748" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="508" y="28" text-anchor="middle" font-size="9" fill="#4a5568" letter-spacing="0.1em">GALVANIC ISOLATION</text>
+
+<!-- Section 4: MCU side -->
+<rect x="616" y="12" width="200" height="650" rx="3" fill="none" stroke="#2d3748" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="716" y="28" text-anchor="middle" font-size="9" fill="#4a5568" letter-spacing="0.1em">RS-485 TRANSCEIVER</text>
+
+<!-- Section 5: MCU -->
+<rect x="824" y="12" width="268" height="650" rx="3" fill="none" stroke="#2d3748" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="958" y="28" text-anchor="middle" font-size="9" fill="#4a5568" letter-spacing="0.1em">MCU INTERFACE</text>
+
+<!-- ════════════════════════════════════════════
+     VEHICLE CONNECTOR J1 (4-pin network tap)
+════════════════════════════════════════════ -->
+<g id="J1" class="comp" data-ref="J1" data-name="Network Access Port" data-part="Weldon 0K90-3111-00 4-pin" data-note="Vehicle-side network tap. Do not add termination. High-impedance passive tap only.">
+  <rect x="24" y="60" width="64" height="100" rx="3" fill="#161b22" stroke="#4a5568" stroke-width="1.2"/>
+  <text x="56" y="78" text-anchor="middle" font-size="9" fill="#f6ad55" font-weight="bold">J1</text>
+  <text x="56" y="90" text-anchor="middle" font-size="8" fill="#94a3b8">NETWORK</text>
+  <text x="56" y="100" text-anchor="middle" font-size="8" fill="#94a3b8">TAP PORT</text>
+  <!-- 4 pins -->
+  <circle cx="88" cy="88" r="3" fill="#4a5568"/>
+  <text x="94" y="91" font-size="8" fill="#94a3b8">1 GND</text>
+  <circle cx="88" cy="108" r="3" fill="#68d391"/>
+  <text x="94" y="111" font-size="8" fill="#68d391">2 BUS+</text>
+  <circle cx="88" cy="128" r="3" fill="#fc8181"/>
+  <text x="94" y="131" font-size="8" fill="#fc8181">3 BUS−</text>
+  <circle cx="88" cy="148" r="3" fill="#fbd38d"/>
+  <text x="94" y="151" font-size="8" fill="#fbd38d">4 +12V</text>
+</g>
+
+<!-- Bus label arrows -->
+<text x="18" y="108" font-size="8" fill="#68d391">VMUX_A</text>
+<text x="18" y="128" font-size="8" fill="#fc8181">VMUX_B</text>
+
+<!-- ════════════════════════════════════════════
+     TVS DIODE ARRAY D1 (SM712 or SMAJ5.0A pair)
+════════════════════════════════════════════ -->
+<g id="D1" class="comp" data-ref="D1" data-name="TVS Diode Array" data-part="SM712 (5V bidirectional TVS pair)" data-note="Clamps bus transients to ±6V. Handles 100A 8/20µs surge. Critical for vehicle load-dump protection. Place within 10mm of J1 pins.">
+  <!-- Bus A wire from J1 -->
+  <line x1="88" y1="108" x2="240" y2="108" stroke="#68d391" stroke-width="1.5"/>
+  <!-- Bus B wire from J1 -->
+  <line x1="88" y1="128" x2="240" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+
+  <!-- TVS symbol for BUS+ -->
+  <!-- Vertical line -->
+  <line x1="248" y1="90" x2="248" y2="148" stroke="#c8d0da" stroke-width="1"/>
+  <!-- Diode A+ -->
+  <polygon points="244,108 252,102 252,114" fill="#fbd38d" opacity="0.6"/>
+  <line x1="252" y1="102" x2="252" y2="114" stroke="#fbd38d" stroke-width="1.2"/>
+  <!-- Zener tails -->
+  <line x1="244" y1="102" x2="240" y2="98" stroke="#fbd38d" stroke-width="1"/>
+  <line x1="244" y1="114" x2="248" y2="110" stroke="#fbd38d" stroke-width="1"/>
+  <!-- Diode B- -->
+  <polygon points="244,128 252,122 252,134" fill="#fbd38d" opacity="0.6"/>
+  <line x1="252" y1="122" x2="252" y2="134" stroke="#fbd38d" stroke-width="1.2"/>
+  <line x1="244" y1="122" x2="240" y2="118" stroke="#fbd38d" stroke-width="1"/>
+  <line x1="244" y1="134" x2="248" y2="130" stroke="#fbd38d" stroke-width="1"/>
+
+  <!-- GND connection -->
+  <line x1="248" y1="148" x2="248" y2="162"/>
+  <!-- GND symbol -->
+  <line x1="238" y1="162" x2="258" y2="162" stroke="#a0aec0" stroke-width="1.5"/>
+  <line x1="242" y1="166" x2="254" y2="166" stroke="#a0aec0" stroke-width="1"/>
+  <line x1="245" y1="170" x2="251" y2="170" stroke="#a0aec0" stroke-width="0.8"/>
+
+  <!-- Ref label -->
+  <text x="265" y="95" font-size="9" fill="#f6ad55">D1</text>
+  <text x="265" y="105" font-size="8" fill="#94a3b8">SM712</text>
+  <text x="265" y="115" font-size="8" fill="#94a3b8">TVS ARRAY</text>
+  <text x="265" y="125" font-size="8" fill="#94a3b8">±6V clamp</text>
+</g>
+
+<!-- ════════════════════════════════════════════
+     SERIES RESISTORS R1, R2 (fault limiting)
+════════════════════════════════════════════ -->
+<!-- R1 on VMUX_A -->
+<g id="R1" class="comp" data-ref="R1" data-name="Series Fault Limiter" data-part="100Ω 1% 1/4W 0805" data-note="Limits short-circuit current into isolation barrier. Also provides ESD current path. Value chosen to not degrade RS-485 signal quality at typical cable lengths.">
+  <line x1="248" y1="108" x2="300" y2="108" stroke="#68d391" stroke-width="1.5"/>
+  <rect x="300" y="102" width="30" height="12" rx="2" fill="#161b22" stroke="#68d391" stroke-width="1"/>
+  <text x="315" y="110" text-anchor="middle" font-size="8" fill="#c8d0da">R1</text>
+  <line x1="330" y1="108" x2="370" y2="108" stroke="#68d391" stroke-width="1.5"/>
+  <text x="315" y="122" text-anchor="middle" font-size="8" fill="#94a3b8">100Ω</text>
+</g>
+
+<!-- R2 on VMUX_B -->
+<g id="R2" class="comp" data-ref="R2" data-name="Series Fault Limiter" data-part="100Ω 1% 1/4W 0805" data-note="Matched to R1 on VMUX_A. Use same value and footprint for both to maintain differential balance. Critical: do not substitute with ferrite bead — inductance degrades RS-485 edge rates.">
+  <line x1="248" y1="128" x2="300" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+  <rect x="300" y="122" width="30" height="12" rx="2" fill="#161b22" stroke="#fc8181" stroke-width="1"/>
+  <text x="315" y="130" text-anchor="middle" font-size="8" fill="#c8d0da">R2</text>
+  <line x1="330" y1="128" x2="370" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+  <text x="315" y="142" text-anchor="middle" font-size="8" fill="#94a3b8">100Ω</text>
+</g>
+
+<!-- ════════════════════════════════════════════
+     ISOLATION BARRIER — ISO7241 (or ADUM1201)
+════════════════════════════════════════════ -->
+<g id="U1" class="comp" data-ref="U1" data-name="Digital Isolator" data-part="ISO7241CDWR (TI) or ADuM1201ARZ" data-note="4-channel digital isolator, 2500Vrms isolation, 150Mbps max. Channels: A=TX_ISO (MCU→bus), B=RX_ISO (bus→MCU). Powered by isolated +3.3V on bus side, +3.3V on MCU side. Package: SOIC-16.">
+  <rect x="420" y="60" width="160" height="200" rx="4" fill="#0e1520" stroke="#4a5568" stroke-width="1.5"/>
+  <!-- IC body lines -->
+  <line x1="420" y1="100" x2="580" y2="100" stroke="#2d3748" stroke-width="0.5"/>
+  <line x1="500" y1="60" x2="500" y2="260" stroke="#2d3748" stroke-width="0.8" stroke-dasharray="4 3"/>
+  <!-- Ref -->
+  <text x="500" y="78" text-anchor="middle" font-size="10" fill="#f6ad55" font-weight="bold">U1</text>
+  <text x="500" y="90" text-anchor="middle" font-size="8" fill="#94a3b8">ISO7241 / ADuM1201</text>
+  <!-- Side labels -->
+  <text x="460" y="112" text-anchor="middle" font-size="8" fill="#fbd38d">BUS SIDE</text>
+  <text x="460" y="122" text-anchor="middle" font-size="8" fill="#fbd38d">VCC1=+3.3V</text>
+  <text x="540" y="112" text-anchor="middle" font-size="8" fill="#b794f4">MCU SIDE</text>
+  <text x="540" y="122" text-anchor="middle" font-size="8" fill="#b794f4">VCC2=+3.3V</text>
+
+  <!-- Channel A: TX direction MCU→bus side (not used for listen-only, present for TX) -->
+  <!-- Left pins (bus side) -->
+  <line x1="420" y1="148" x2="440" y2="148"/><!-- IN_A -->
+  <line x1="420" y1="168" x2="440" y2="168"/><!-- OUT_B -->
+  <text x="442" y="152" font-size="8" fill="#b794f4">IN_A (TX→)</text>
+  <text x="442" y="172" font-size="8" fill="#68d391">OUT_B (→RX)</text>
+
+  <!-- Right pins (MCU side) -->
+  <line x1="560" y1="148" x2="580" y2="148"/>
+  <line x1="560" y1="168" x2="580" y2="168"/>
+  <text x="556" y="152" text-anchor="end" font-size="8" fill="#68d391">OUT_A</text>
+  <text x="556" y="172" text-anchor="end" font-size="8" fill="#b794f4">IN_B</text>
+
+  <!-- Isolation barrier symbol (double vertical lines) -->
+  <line x1="497" y1="130" x2="497" y2="260" stroke="#3b82f6" stroke-width="1.5"/>
+  <line x1="503" y1="130" x2="503" y2="260" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="500" y="145" text-anchor="middle" font-size="8" fill="#3b82f6">≈</text>
+  <text x="500" y="230" text-anchor="middle" font-size="7" fill="#3b82f6">2500Vrms</text>
+  <text x="500" y="242" text-anchor="middle" font-size="7" fill="#3b82f6">ISOLATION</text>
+  <text x="500" y="254" text-anchor="middle" font-size="7" fill="#3b82f6">BARRIER</text>
+
+  <!-- Direction arrows -->
+  <text x="500" y="158" text-anchor="middle" font-size="10" fill="#4a5568">→</text>
+  <text x="500" y="178" text-anchor="middle" font-size="10" fill="#4a5568">←</text>
+</g>
+
+<!-- ════════════════════════════════════════════
+     RS-485 TRANSCEIVER — MAX3485 / SP3485
+════════════════════════════════════════════ -->
+<g id="U2" class="comp" data-ref="U2" data-name="RS-485 Transceiver" data-part="MAX3485ESA+ or SP3485EN" data-note="Half-duplex RS-485/RS-422 transceiver. 3.3V supply. Slew-rate limited (MAX3485) for EMI reduction. DE/~RE tied together for direction control via MCU GPIO. Shutdown pin tied high. Package: SOIC-8.">
+  <rect x="636" y="100" width="160" height="160" rx="4" fill="#0e1520" stroke="#4a5568" stroke-width="1.5"/>
+  <text x="716" y="120" text-anchor="middle" font-size="10" fill="#f6ad55" font-weight="bold">U2</text>
+  <text x="716" y="132" text-anchor="middle" font-size="8" fill="#94a3b8">MAX3485 / SP3485</text>
+  <text x="716" y="144" text-anchor="middle" font-size="8" fill="#94a3b8">RS-485 XCVR</text>
+
+  <!-- Left pins: bus side -->
+  <line x1="596" y1="160" x2="636" y2="160"/><!-- A -->
+  <line x1="596" y1="180" x2="636" y2="180"/><!-- B -->
+  <text x="638" y="164" font-size="8" fill="#68d391">A (+)</text>
+  <text x="638" y="184" font-size="8" fill="#fc8181">B (−)</text>
+
+  <!-- Right pins: logic side -->
+  <line x1="796" y1="155" x2="826" y2="155"/><!-- RO -->
+  <line x1="796" y1="175" x2="826" y2="175"/><!-- RE~ -->
+  <line x1="796" y1="195" x2="826" y2="195"/><!-- DE -->
+  <line x1="796" y1="215" x2="826" y2="215"/><!-- DI -->
+  <text x="794" y="159" text-anchor="end" font-size="8" fill="#b794f4">RO</text>
+  <text x="794" y="179" text-anchor="end" font-size="8" fill="#b794f4">~RE</text>
+  <text x="794" y="199" text-anchor="end" font-size="8" fill="#b794f4">DE</text>
+  <text x="794" y="219" text-anchor="end" font-size="8" fill="#b794f4">DI</text>
+
+  <!-- VCC / GND on top/bottom -->
+  <line x1="716" y1="100" x2="716" y2="80"/>
+  <text x="716" y="76" text-anchor="middle" font-size="8" fill="#fbd38d">+3.3V</text>
+  <line x1="716" y1="260" x2="716" y2="280"/>
+  <line x1="706" y1="280" x2="726" y2="280" stroke="#a0aec0" stroke-width="1.5"/>
+  <line x1="710" y1="284" x2="722" y2="284" stroke="#a0aec0" stroke-width="1"/>
+  <line x1="713" y1="288" x2="719" y2="288" stroke="#a0aec0" stroke-width="0.8"/>
+</g>
+
+<!-- Wire: TVS/R1 → U2 A pin via isolation -->
+<!-- VMUX_A: R1 → U1 bus side input → U1 mcu side output → U2 A -->
+<line x1="370" y1="108" x2="420" y2="108" stroke="#68d391" stroke-width="1.5"/>
+<!-- Internal U1: bus side receives on OUT_B pin at y=168 -->
+<line x1="370" y1="108" x2="370" y2="168" stroke="#68d391" stroke-width="1.5"/>
+<line x1="370" y1="168" x2="420" y2="168" stroke="#68d391" stroke-width="1.5"/>
+
+<!-- VMUX_B: R2 → U1 -->
+<line x1="370" y1="128" x2="390" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+<line x1="390" y1="128" x2="390" y2="160" stroke="#fc8181" stroke-width="1.5"/>
+
+<!-- Note: The isolator sits between the bus-side RS485 driver and MCU. 
+     Physical RS-485 lines go directly to U2 A/B — isolator handles the logic signals -->
+
+<!-- Wire: U2 A/B to bus (through protection) -->
+<line x1="596" y1="160" x2="370" y2="160" stroke="#68d391" stroke-width="1.5"/>
+<circle cx="370" cy="160" r="3" fill="#68d391"/><!-- Junction -->
+<line x1="596" y1="180" x2="390" y2="180" stroke="#fc8181" stroke-width="1.5"/>
+<circle cx="390" cy="180" r="3" fill="#fc8181"/><!-- Junction -->
+<line x1="390" y1="128" x2="390" y2="180" stroke="#fc8181" stroke-width="1.5"/>
+
+<!-- U1 to U2 logic wires (isolated side) -->
+<!-- RX path: U2 RO → U1 IN_B (bus to mcu) -->
+<line x1="826" y1="155" x2="860" y2="155" stroke="#b794f4" stroke-width="1.2"/>
+
+<!-- DE/RE~ tied together → MCU GPIO -->
+<line x1="826" y1="175" x2="850" y2="175" stroke="#b794f4" stroke-width="1.2"/>
+<line x1="826" y1="195" x2="850" y2="195" stroke="#b794f4" stroke-width="1.2"/>
+<line x1="850" y1="175" x2="850" y2="195" stroke="#b794f4" stroke-width="1.2"/>
+<circle cx="850" cy="185" r="3" fill="#b794f4"/>
+<line x1="850" y1="185" x2="870" y2="185" stroke="#b794f4" stroke-width="1.2"/>
+
+<!-- DI: MCU TX → U2 DI -->
+<line x1="826" y1="215" x2="860" y2="215" stroke="#b794f4" stroke-width="1.2"/>
+
+<!-- ════════════════════════════════════════════
+     BYPASS CAPACITORS
+════════════════════════════════════════════ -->
+<!-- C1 bypass on U2 VCC -->
+<g id="C1" class="comp" data-ref="C1" data-name="Bypass Capacitor" data-part="100nF X7R 0402 (10V)" data-note="Place within 1mm of U2 VCC pin. Second cap C2=10µF MLCC in parallel for bulk decoupling. Essential for clean RS-485 switching edges.">
+  <line x1="740" y1="80" x2="740" y2="60"/>
+  <line x1="716" y1="80" x2="760" y2="80" stroke="#fbd38d" stroke-width="1"/>
+  <!-- Cap symbol -->
+  <line x1="730" y1="60" x2="750" y2="60" stroke="#c8d0da" stroke-width="1.5"/>
+  <line x1="730" y1="54" x2="750" y2="54" stroke="#c8d0da" stroke-width="1.5"/>
+  <line x1="740" y1="48" x2="740" y2="40"/>
+  <line x1="730" y1="40" x2="750" y2="40" stroke="#fbd38d" stroke-width="1"/>
+  <text x="755" y="58" font-size="8" fill="#f6ad55">C1</text>
+  <text x="755" y="68" font-size="8" fill="#94a3b8">100nF</text>
+  <line x1="730" y1="40" x2="730" y2="36"/>
+  <line x1="720" y1="36" x2="740" y2="36" stroke="#a0aec0" stroke-width="1.2"/>
+  <line x1="723" y1="32" x2="737" y2="32" stroke="#a0aec0" stroke-width="0.8"/>
+  <line x1="726" y1="28" x2="734" y2="28" stroke="#a0aec0" stroke-width="0.6"/>
+</g>
+
+<!-- ════════════════════════════════════════════
+     MCU CONNECTOR / INTERFACE SIGNALS
+════════════════════════════════════════════ -->
+<g id="MCU_HDR" class="comp" data-ref="J2" data-name="MCU Header" data-part="2×5 0.1-inch pitch or JST connector" data-note="Interface to MCU development board or custom PCB. All signals are 3.3V logic. TX/RX relative to MCU. DIR: High=transmit, Low=receive (listen-only mode = permanently Low during Phase 1 capture).">
+  <rect x="870" y="120" width="130" height="180" rx="3" fill="#160d20" stroke="#b794f4" stroke-width="1"/>
+  <text x="935" y="138" text-anchor="middle" font-size="9" fill="#f6ad55" font-weight="bold">J2 — MCU</text>
+
+  <!-- Pin rows -->
+  <!-- 1: MCU_RX -->
+  <circle cx="870" cy="158" r="3" fill="#b794f4"/>
+  <line x1="860" y1="155" x2="870" y2="158" stroke="#b794f4" stroke-width="1"/>
+  <text x="876" y="162" font-size="8" fill="#b794f4">1  MCU_RX (UART)</text>
+
+  <!-- 2: DIR -->
+  <circle cx="870" cy="178" r="3" fill="#b794f4"/>
+  <line x1="870" y1="185" x2="870" y2="178" stroke="#b794f4" stroke-width="1"/>
+  <text x="876" y="182" font-size="8" fill="#b794f4">2  DIR (DE/~RE)</text>
+
+  <!-- 3: MCU_TX -->
+  <circle cx="870" cy="218" r="3" fill="#b794f4"/>
+  <line x1="860" y1="215" x2="870" y2="218" stroke="#b794f4" stroke-width="1"/>
+  <text x="876" y="222" font-size="8" fill="#b794f4">3  MCU_TX (UART)</text>
+
+  <!-- 4: +3.3V -->
+  <circle cx="870" cy="248" r="3" fill="#fbd38d"/>
+  <text x="876" y="252" font-size="8" fill="#fbd38d">4  +3.3V</text>
+
+  <!-- 5: GND -->
+  <circle cx="870" cy="268" r="3" fill="#a0aec0"/>
+  <text x="876" y="272" font-size="8" fill="#a0aec0">5  GND</text>
+
+  <text x="935" y="318" text-anchor="middle" font-size="7" fill="#4a5568">Listen-only: DIR=Low</text>
+</g>
+
+<!-- ════════════════════════════════════════════
+     POWER SECTION — isolated DC/DC
+════════════════════════════════════════════ -->
+<g id="PS1" class="comp" data-ref="PS1" data-name="Isolated DC/DC Converter" data-part="Murata MEE1S0512SC or Recom RO-0505S" data-note="1W isolated DC/DC. Input: +5V from USB adapter or vehicle 12V (via 7805/LDO). Output: isolated +5V for bus-side VCC of U1. Provides 1000Vrms isolation between GND domains. Critical: do not connect GND of primary to GND of secondary.">
+  <rect x="420" y="320" width="160" height="100" rx="4" fill="#0e1520" stroke="#4a5568" stroke-width="1.5"/>
+  <text x="500" y="340" text-anchor="middle" font-size="9" fill="#f6ad55" font-weight="bold">PS1</text>
+  <text x="500" y="352" text-anchor="middle" font-size="8" fill="#94a3b8">ISOLATED DC/DC</text>
+  <text x="500" y="364" text-anchor="middle" font-size="8" fill="#94a3b8">MEE1S0512SC</text>
+  <text x="500" y="376" text-anchor="middle" font-size="8" fill="#94a3b8">+5Vin → +5Viso</text>
+  <!-- Barrier -->
+  <line x1="497" y1="325" x2="497" y2="415" stroke="#3b82f6" stroke-width="1"/>
+  <line x1="503" y1="325" x2="503" y2="415" stroke="#3b82f6" stroke-width="1"/>
+  <!-- Input -->
+  <line x1="380" y1="350" x2="420" y2="350" stroke="#fbd38d" stroke-width="1.2"/>
+  <text x="378" y="354" text-anchor="end" font-size="8" fill="#fbd38d">+5V</text>
+  <line x1="380" y1="370" x2="420" y2="370" stroke="#a0aec0" stroke-width="1.2"/>
+  <text x="378" y="374" text-anchor="end" font-size="8" fill="#a0aec0">GND</text>
+  <!-- Output -->
+  <line x1="580" y1="350" x2="620" y2="350" stroke="#fbd38d" stroke-width="1.2"/>
+  <text x="622" y="354" font-size="8" fill="#fbd38d">+5V_ISO</text>
+  <line x1="580" y1="370" x2="620" y2="370" stroke="#a0aec0" stroke-width="1.2"/>
+  <text x="622" y="374" font-size="8" fill="#a0aec0">GND_ISO</text>
+  <text x="500" y="406" text-anchor="middle" font-size="7" fill="#3b82f6">1000Vrms isolation</text>
+</g>
+
+<!-- LDO for bus-side 3.3V from 5V_ISO -->
+<g id="U3" class="comp" data-ref="U3" data-name="LDO Regulator (bus side)" data-part="AMS1117-3.3 or MCP1700-3302E" data-note="Converts isolated +5V to +3.3V for U1 bus-side VCC. Low dropout. 100mA capacity is sufficient for ISO7241 bus-side quiescent current (~3mA typical).">
+  <rect x="636" y="320" width="100" height="60" rx="4" fill="#0e1520" stroke="#4a5568" stroke-width="1"/>
+  <text x="686" y="338" text-anchor="middle" font-size="9" fill="#f6ad55">U3</text>
+  <text x="686" y="350" text-anchor="middle" font-size="8" fill="#94a3b8">AMS1117-3.3</text>
+  <text x="686" y="362" text-anchor="middle" font-size="8" fill="#94a3b8">LDO 3.3V</text>
+  <line x1="620" y1="340" x2="636" y2="340" stroke="#fbd38d" stroke-width="1.2"/>
+  <line x1="736" y1="340" x2="760" y2="340" stroke="#fbd38d" stroke-width="1.2"/>
+  <text x="762" y="344" font-size="8" fill="#fbd38d">+3.3V_ISO</text>
+  <line x1="686" y1="380" x2="686" y2="400"/>
+  <line x1="676" y1="400" x2="696" y2="400" stroke="#a0aec0" stroke-width="1.5"/>
+  <line x1="679" y1="404" x2="693" y2="404" stroke="#a0aec0" stroke-width="1"/>
+  <line x1="682" y1="408" x2="690" y2="408" stroke="#a0aec0" stroke-width="0.8"/>
+</g>
+
+<!-- ════════════════════════════════════════════
+     FERRITE / COMMON MODE CHOKE L1
+════════════════════════════════════════════ -->
+<g id="L1" class="comp" data-ref="L1" data-name="Common Mode Choke" data-part="Würth 744235601 (600Ω@100MHz)" data-note="Common-mode choke on bus lines before TVS. Suppresses high-frequency common-mode noise from alternator, ignition, and radio interference. Differential-mode impedance is very low so RS-485 signals pass unimpeded. Bifilar wound.">
+  <text x="150" y="200" text-anchor="middle" font-size="9" fill="#f6ad55">L1</text>
+  <text x="150" y="212" text-anchor="middle" font-size="8" fill="#94a3b8">CMC</text>
+  <text x="150" y="222" text-anchor="middle" font-size="8" fill="#94a3b8">600Ω</text>
+  <!-- Coil symbol A line -->
+  <line x1="110" y1="108" x2="125" y2="108" stroke="#68d391" stroke-width="1.5"/>
+  <path d="M125,108 Q128,101 131,108 Q134,101 137,108 Q140,101 143,108 Q146,101 149,108 Q152,101 155,108 Q158,101 161,108 Q164,101 167,108" fill="none" stroke="#68d391" stroke-width="1.2"/>
+  <line x1="167" y1="108" x2="182" y2="108" stroke="#68d391" stroke-width="1.5"/>
+  <!-- Coil core line -->
+  <line x1="125" y1="112" x2="167" y2="112" stroke="#94a3b8" stroke-width="0.8"/>
+  <line x1="125" y1="114" x2="167" y2="114" stroke="#94a3b8" stroke-width="0.8"/>
+  <!-- Coil symbol B line -->
+  <line x1="110" y1="128" x2="125" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+  <path d="M125,128 Q128,121 131,128 Q134,121 137,128 Q140,121 143,128 Q146,121 149,128 Q152,121 155,128 Q158,121 161,128 Q164,121 167,128" fill="none" stroke="#fc8181" stroke-width="1.2"/>
+  <line x1="167" y1="128" x2="182" y2="128" stroke="#fc8181" stroke-width="1.5"/>
+</g>
+
+<!-- ════════════════════════════════════════════
+     PASSIVE TAP NOTE
+════════════════════════════════════════════ -->
+<rect x="24" y="440" width="188" height="180" rx="3" fill="#0d1a12" stroke="#1d9e75" stroke-width="1" stroke-dasharray="3 2"/>
+<text x="118" y="458" text-anchor="middle" font-size="9" fill="#68d391" font-weight="bold">PHASE 1: PASSIVE TAP</text>
+<text x="34" y="474" font-size="8" fill="#94a3b8">▸ Remove DE pin jumper</text>
+<text x="34" y="488" font-size="8" fill="#94a3b8">▸ DIR = GND (listen only)</text>
+<text x="34" y="502" font-size="8" fill="#94a3b8">▸ DI pin: leave floating</text>
+<text x="34" y="516" font-size="8" fill="#94a3b8">▸ Connect USB-RS485 in</text>
+<text x="34" y="528" font-size="8" fill="#94a3b8">   parallel with J1 pin 2,3</text>
+<text x="34" y="542" font-size="8" fill="#94a3b8">▸ No termination resistors</text>
+<text x="34" y="556" font-size="8" fill="#94a3b8">▸ Logic analyzer on A/B</text>
+<text x="34" y="570" font-size="8" fill="#94a3b8">   relative to GND (pin 1)</text>
+<text x="34" y="586" font-size="8" fill="#68d391" font-weight="bold">SYNC packet every ~4s</text>
+<text x="34" y="600" font-size="8" fill="#68d391" font-weight="bold">from Node 1 = bus anchor</text>
+
+<!-- ════════════════════════════════════════════
+     FULL BUS OPERATION NOTE
+════════════════════════════════════════════ -->
+<rect x="836" y="440" width="250" height="200" rx="3" fill="#100d1e" stroke="#b794f4" stroke-width="1" stroke-dasharray="3 2"/>
+<text x="961" y="458" text-anchor="middle" font-size="9" fill="#b794f4" font-weight="bold">PHASE 3: FULL OPERATION</text>
+<text x="846" y="474" font-size="8" fill="#94a3b8">▸ DIR GPIO: Low=RX, High=TX</text>
+<text x="846" y="488" font-size="8" fill="#94a3b8">▸ MCU controls DE/~RE</text>
+<text x="846" y="502" font-size="8" fill="#94a3b8">▸ TX turnaround &lt;1µs req'd</text>
+<text x="846" y="516" font-size="8" fill="#94a3b8">▸ Assert DIR High before DI</text>
+<text x="846" y="530" font-size="8" fill="#94a3b8">▸ De-assert after last stop bit</text>
+<text x="846" y="544" font-size="8" fill="#94a3b8">▸ Default state = RX (DIR=Low)</text>
+<text x="846" y="558" font-size="8" fill="#94a3b8">▸ Monitor for SYNC every 4s</text>
+<text x="846" y="572" font-size="8" fill="#94a3b8">▸ Watch BC counter (collisions)</text>
+<text x="846" y="586" font-size="8" fill="#b794f4" font-weight="bold">Node address: assign unused</text>
+<text x="846" y="600" font-size="8" fill="#b794f4" font-weight="bold">node # (2-32) in firmware</text>
+
+<!-- ════════════════════════════════════════════
+     TITLE BLOCK (bottom right)
+════════════════════════════════════════════ -->
+<rect x="636" y="450" width="180" height="200" fill="#0e1117" stroke="#2d3748" stroke-width="1"/>
+<line x1="636" y1="470" x2="816" y2="470" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="490" x2="816" y2="490" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="510" x2="816" y2="510" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="530" x2="816" y2="530" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="550" x2="816" y2="550" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="590" x2="816" y2="590" stroke="#2d3748" stroke-width="0.5"/>
+<line x1="636" y1="630" x2="816" y2="630" stroke="#2d3748" stroke-width="0.5"/>
+<text x="640" y="464" font-size="7" fill="#4a5568">PROJECT</text>
+<text x="640" y="484" font-size="8" fill="#94a3b8">Braun Ambulance V-MUX</text>
+<text x="640" y="504" font-size="7" fill="#4a5568">TITLE</text>
+<text x="640" y="524" font-size="8" fill="#94a3b8">Bus Tap &amp; Isolation Intf.</text>
+<text x="640" y="544" font-size="7" fill="#4a5568">DRAWN</text>
+<text x="640" y="564" font-size="8" fill="#94a3b8">Eng. Review Required</text>
+<text x="640" y="584" font-size="7" fill="#4a5568">REV / DATE</text>
+<text x="640" y="604" font-size="8" fill="#94a3b8">A — 2024</text>
+<text x="640" y="624" font-size="7" fill="#4a5568">SHEET</text>
+<text x="640" y="645" font-size="8" fill="#94a3b8">1 of 1</text>
+<text x="640" y="662" font-size="7" fill="#4a5568">NOTE: FOR DESIGN REVIEW ONLY</text>
+
+<!-- ════════════════════════════════════════════
+     NET FLAGS
+════════════════════════════════════════════ -->
+<!-- 12V input flag -->
+<rect x="228" y="440" width="60" height="20" rx="3" fill="#1e1608" stroke="#fbd38d" stroke-width="1"/>
+<text x="258" y="454" text-anchor="middle" font-size="8" fill="#fbd38d">+12V VEH</text>
+<line x1="258" y1="460" x2="258" y2="480"/>
+<!-- 7805/LDO block for 12V→5V -->
+<rect x="228" y="480" width="80" height="40" rx="3" fill="#0e1520" stroke="#4a5568" stroke-width="1"/>
+<text x="268" y="497" text-anchor="middle" font-size="8" fill="#f6ad55">U4: LDO</text>
+<text x="268" y="509" text-anchor="middle" font-size="8" fill="#94a3b8">12V→5V</text>
+<line x1="268" y1="520" x2="268" y2="540"/>
+<rect x="238" y="540" width="60" height="20" rx="3" fill="#1e1608" stroke="#fbd38d" stroke-width="1"/>
+<text x="268" y="554" text-anchor="middle" font-size="8" fill="#fbd38d">+5V LOGIC</text>
+<line x1="300" y1="550" x2="380" y2="550" stroke="#fbd38d" stroke-width="1" stroke-dasharray="3 2"/>
+<line x1="380" y1="550" x2="380" y2="370" stroke="#fbd38d" stroke-width="1" stroke-dasharray="3 2"/>
+
+<!-- Click hint -->
+<text x="550" y="580" text-anchor="middle" font-size="9" fill="#4a5568">↑ hover components for specifications</text>
+
+</svg>
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tip"></div>
+
+<div class="notes-panel">
+  <div class="note-card">
+    <h3>Bill of Materials (Key Parts)</h3>
+    <ul>
+      <li><b>J1</b> — Weldon 0K90-3111-00 network tap port</li>
+      <li><b>D1</b> — SM712 bidirectional TVS array, ±6V</li>
+      <li><b>R1,R2</b> — 100Ω 1% 0805 series resistors</li>
+      <li><b>L1</b> — Würth 744235601 common-mode choke</li>
+      <li><b>U1</b> — ISO7241CDWR 4ch digital isolator</li>
+      <li><b>U2</b> — MAX3485ESA+ RS-485 transceiver</li>
+      <li><b>U3</b> — AMS1117-3.3 LDO (bus side)</li>
+      <li><b>U4</b> — 12V→5V LDO (vehicle power input)</li>
+      <li><b>PS1</b> — Murata MEE1S0512SC isolated DC/DC</li>
+      <li><b>C1</b> — 100nF X7R bypass (×4, one per IC)</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <h3>Critical Design Rules</h3>
+    <ul>
+      <li><b>No termination</b> resistors — V-MUX forbids them</li>
+      <li><b>High-impedance tap</b> — do not drive bus in Phase 1</li>
+      <li><b>Isolation GNDs separate</b> — never tie together</li>
+      <li><b>DIR default Low</b> = receive-only at power-on</li>
+      <li><b>TX enable time</b> &lt;1µs before first data bit</li>
+      <li><b>TVS D1 before</b> all other components on bus lines</li>
+      <li><b>Bypass caps</b> within 1mm of each IC VCC pin</li>
+      <li><b>Twisted pair</b> routing for A/B traces on PCB</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <h3>Signal Flow — Listen Mode</h3>
+    <ul>
+      <li>J1 pins 2,3 → L1 CMC → D1 TVS → R1/R2</li>
+      <li>R1/R2 → U2 A/B pins (RS-485 differential input)</li>
+      <li>U2 RO → U1 isolator → J2 MCU_RX pin</li>
+      <li>DIR pin held Low: ~RE asserted, DE deasserted</li>
+      <li>U2 operates as receiver only — no bus drive</li>
+      <li>MCU UART receives decoded bytes on MCU_RX</li>
+      <li>Logic analyzer in parallel on J1 pins 2/3 for framing</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <h3>Signal Flow — Transmit Mode</h3>
+    <ul>
+      <li>MCU asserts DIR High via GPIO</li>
+      <li>U2 DE enabled, ~RE disabled (bus driven)</li>
+      <li>MCU_TX → U1 isolator → U2 DI → bus A/B</li>
+      <li>Turnaround: DIR must go High &gt;1 bit-time before TX</li>
+      <li>After last stop bit: DIR returns Low immediately</li>
+      <li>Bus returns to high-impedance listen state</li>
+      <li>Implement in MCU UART interrupt or DMA complete CB</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <h3>PCB Layout Notes</h3>
+    <ul>
+      <li>Two ground planes: <b>GND</b> and <b>GND_ISO</b> — no connection</li>
+      <li>Isolation slot under U1 and PS1 on PCB</li>
+      <li>D1, L1 on board edge closest to J1 connector</li>
+      <li>R1/R2 as matched pair, adjacent on same layer</li>
+      <li>All bypass caps on same layer as IC, via-in-pad ok</li>
+      <li>A/B traces: 100Ω differential impedance, equal length</li>
+      <li>Keep MCU side traces away from bus side traces</li>
+    </ul>
+  </div>
+  <div class="note-card">
+    <h3>Next Steps</h3>
+    <ul>
+      <li>Breadboard U2 + USB-RS485 for Phase 1 capture</li>
+      <li>Confirm baud rate with logic analyzer (9600–115200)</li>
+      <li>Capture SYNC packet from Node 1 (~4s period)</li>
+      <li>Build message map: toggle each switch, log bytes</li>
+      <li>Design PCB after message map confirmed</li>
+      <li>Add isolated PS1 in Phase 2 for vehicle install</li>
+      <li>Test U1 isolator with bench power before vehicle</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const tip = document.getElementById('tip');
+const comps = document.querySelectorAll('.comp');
+
+comps.forEach(el => {
+  el.style.cursor = 'pointer';
+  el.addEventListener('mouseenter', (e) => {
+    tip.innerHTML = `<b>${el.dataset.ref} — ${el.dataset.name}</b>
+      <span class="part">${el.dataset.part}</span>
+      <span class="note">${el.dataset.note}</span>`;
+    tip.classList.add('show');
+  });
+  el.addEventListener('mousemove', (e) => {
+    tip.style.left = (e.clientX + 14) + 'px';
+    tip.style.top  = (e.clientY - 10) + 'px';
+  });
+  el.addEventListener('mouseleave', () => {
+    tip.classList.remove('show');
+  });
+});
+</script>
+</body>
+</html>
