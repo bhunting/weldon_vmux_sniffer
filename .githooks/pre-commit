@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pre-commit: byte-compile both tools and run the test suite.
+# Enable once per clone:  git config core.hooksPath .githooks
+# (ast.parse alone misses errors such as `global` after use; py_compile does not.)
+set -e
+if [ -x .venv/Scripts/python.exe ]; then PY=.venv/Scripts/python.exe
+elif [ -x .venv/bin/python ]; then PY=.venv/bin/python
+else PY=python; fi
+"$PY" -m py_compile vmux_capture.py vmux_generator.py
+"$PY" -m pytest -q

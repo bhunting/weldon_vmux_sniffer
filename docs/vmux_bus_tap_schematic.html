@@ -231,20 +231,20 @@
 <!-- ════════════════════════════════════════════
      VEHICLE CONNECTOR J1 (4-pin network tap)
 ════════════════════════════════════════════ -->
-<g id="J1" class="comp" data-ref="J1" data-name="Network Access Port" data-part="Weldon 0K90-3111-00 4-pin" data-note="Vehicle-side network tap. Do not add termination. High-impedance passive tap only.">
+<g id="J1" class="comp" data-ref="J1" data-name="Network Access Port" data-part="Deutsch DT04-4P (Weldon tap kit 0K90-3111-00; Braun 49384 Detail C)" data-note="Pin 1 comms A, pin 2 comms B, pin 3 GND (18-BK-GND), pin 4 power (ckt 312). Vehicle-side network tap. Do not add termination. High-impedance passive tap only.">
   <rect x="24" y="60" width="64" height="100" rx="3" fill="#161b22" stroke="#4a5568" stroke-width="1.2"/>
   <text x="56" y="78" text-anchor="middle" font-size="9" fill="#f6ad55" font-weight="bold">J1</text>
   <text x="56" y="90" text-anchor="middle" font-size="8" fill="#94a3b8">NETWORK</text>
   <text x="56" y="100" text-anchor="middle" font-size="8" fill="#94a3b8">TAP PORT</text>
   <!-- 4 pins -->
   <circle cx="88" cy="88" r="3" fill="#4a5568"/>
-  <text x="94" y="91" font-size="8" fill="#94a3b8">1 GND</text>
+  <text x="94" y="91" font-size="8" fill="#94a3b8">3 GND</text>
   <circle cx="88" cy="108" r="3" fill="#68d391"/>
-  <text x="94" y="111" font-size="8" fill="#68d391">2 BUS+</text>
+  <text x="94" y="111" font-size="8" fill="#68d391">1 BUS A</text>
   <circle cx="88" cy="128" r="3" fill="#fc8181"/>
-  <text x="94" y="131" font-size="8" fill="#fc8181">3 BUS−</text>
+  <text x="94" y="131" font-size="8" fill="#fc8181">2 BUS B</text>
   <circle cx="88" cy="148" r="3" fill="#fbd38d"/>
-  <text x="94" y="151" font-size="8" fill="#fbd38d">4 +12V</text>
+  <text x="94" y="151" font-size="8" fill="#fbd38d">4 +V 312</text>
 </g>
 
 <!-- Bus label arrows -->
@@ -545,10 +545,10 @@
 <text x="34" y="488" font-size="8" fill="#94a3b8">▸ DIR = GND (listen only)</text>
 <text x="34" y="502" font-size="8" fill="#94a3b8">▸ DI pin: leave floating</text>
 <text x="34" y="516" font-size="8" fill="#94a3b8">▸ Connect USB-RS485 in</text>
-<text x="34" y="528" font-size="8" fill="#94a3b8">   parallel with J1 pin 2,3</text>
+<text x="34" y="528" font-size="8" fill="#94a3b8">   parallel with J1 pin 1,2</text>
 <text x="34" y="542" font-size="8" fill="#94a3b8">▸ No termination resistors</text>
 <text x="34" y="556" font-size="8" fill="#94a3b8">▸ Logic analyzer on A/B</text>
-<text x="34" y="570" font-size="8" fill="#94a3b8">   relative to GND (pin 1)</text>
+<text x="34" y="570" font-size="8" fill="#94a3b8">   relative to GND (pin 3)</text>
 <text x="34" y="586" font-size="8" fill="#68d391" font-weight="bold">SYNC packet every ~4s</text>
 <text x="34" y="600" font-size="8" fill="#68d391" font-weight="bold">from Node 1 = bus anchor</text>
 
@@ -621,7 +621,7 @@
   <div class="note-card">
     <h3>Bill of Materials (Key Parts)</h3>
     <ul>
-      <li><b>J1</b> — Weldon 0K90-3111-00 network tap port</li>
+      <li><b>J1</b> — DT04-4P network tap (1 A, 2 B, 3 GND, 4 ckt 312)</li>
       <li><b>D1</b> — SM712 bidirectional TVS array, ±6V</li>
       <li><b>R1,R2</b> — 100Ω 1% 0805 series resistors</li>
       <li><b>L1</b> — Würth 744235601 common-mode choke</li>
@@ -649,13 +649,13 @@
   <div class="note-card">
     <h3>Signal Flow — Listen Mode</h3>
     <ul>
-      <li>J1 pins 2,3 → L1 CMC → D1 TVS → R1/R2</li>
+      <li>J1 pins 1,2 → L1 CMC → D1 TVS → R1/R2</li>
       <li>R1/R2 → U2 A/B pins (RS-485 differential input)</li>
       <li>U2 RO → U1 isolator → J2 MCU_RX pin</li>
       <li>DIR pin held Low: ~RE asserted, DE deasserted</li>
       <li>U2 operates as receiver only — no bus drive</li>
       <li>MCU UART receives decoded bytes on MCU_RX</li>
-      <li>Logic analyzer in parallel on J1 pins 2/3 for framing</li>
+      <li>Logic analyzer in parallel on J1 pins 1/2 for framing</li>
     </ul>
   </div>
   <div class="note-card">

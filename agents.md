@@ -27,15 +27,20 @@ You are assisting an experienced professional embedded systems engineer on this 
 ### V-MUX bus (physical layer)
 - **Protocol:** Weldon V-MUX, proprietary message-based network
 - **Physical layer:** RS-485, 2-wire half-duplex twisted pair
-- **Cable:** Weldon part 0L20-1600-xx series RS-485 twisted pair
-- **Topology:** Bus (daisy-chain), up to 32 nodes
+- **Cable:** Weldon specifies 0L20-1600-xx as the only acceptable cable (V-MUX Essentials p.5), but Braun dwg 49384 calls out **Belden 8760** shielded twisted pair (clear = A, black = B, bare = shield) for this vehicle
+- **Topology:** Bus (daisy-chain), up to 32 nodes (Connector Spec p.7). This vehicle per dwg 49384: nodes 1 & 2 in PDQ, node 3 above OSS #2, display nodes 4 (MCC, cab) and 5 (ACP, streetside), joined by DT04-3P-P007 Y adapters
+- **Shield:** single-point grounded (Weldon: one drain for the whole network, away from node grounds). Braun 49384: bare wire pinned at node 1 only, cut off elsewhere. **The tap must never connect the shield.**
+- **Node loading:** unpowered A–B ≈ 180 kΩ (3rd-gen nodes), ≈ 315–430 kΩ (4th-gen); network ≈ 180 kΩ / n (Essentials p.7). No termination or low-impedance bias network exists
+- **Local echo:** nodes hear their own transmissions (Essentials p.8)
 - **Termination:** NONE — Weldon explicitly forbids termination resistors on this network
-- **Network access port:** 4-pin connector (Weldon 0K90-3111-00)
-  - Pin 1: GND (bus ground — use for all probe references)
-  - Pin 2: BUS A (+) — VMUX_A
-  - Pin 3: BUS B (−) — VMUX_B
-  - Pin 4: +12V vehicle supply
-  - **UNVERIFIED:** pinout and part number above were not confirmed against the user's 3-pin/4-pin wiring diagrams. Verify against `docs/reference/` before any physical connection.
+- **Network access port (J1):** Deutsch DT04-4P receptacle (Weldon 0K15-1436-00). Weldon kit 0K90-3111-00 = "V-MUX network forward tap" (Connector Spec p.6–7). On this vehicle: dwg 49384 Detail C, DT04-4P "DL", Braun connector 19126, located **behind ACP or in PDQ**.
+  - **Pin 1: comms A** (Weldon: white; Braun Belden 8760: clear) — VMUX_A
+  - **Pin 2: comms B** (black) — VMUX_B
+  - **Pin 3: ground** — Weldon "optional ground" / "not used"; Braun: wire 18-BK-GND
+  - **Pin 4: power** — Weldon "optional +V Batt" / "not used"; Braun: wire 18-312-OG (circuit 312; E6207-1 shows 312 on the fused Vista/MCC power feed — battery-hot vs ignition-switched not confirmed)
+  - Shield: not on J1 (bare wire cut off at the DT04-4P per Detail C)
+  - Sources: Weldon V-MUX Connector Spec 2024-05 p.8; V-MUX Essentials p.5; Braun 6207 prints, dwg 49384 Detail C (PDF p.34). **Earlier pinout (pin 1 GND, 2 A, 3 B) was wrong.**
+  - Still to confirm on the vehicle: that the DL connector is populated as drawn (meter pin 3 to battery negative, pin 4 voltage key-off/key-on, pins 1/2 ≈ 180 kΩ/n to each other unpowered).
 
 ### V-MUX protocol (documented behaviour)
 - **SYNC message:** Node 1 broadcasts every ~4 seconds; coordinates flash patterns and confirms network health
@@ -85,7 +90,8 @@ You are assisting an experienced professional embedded systems engineer on this 
   - No termination resistors anywhere on bus-side
   - Two separate ground planes (GND and GND_ISO) — never connect
   - DIR pin default Low = receive-only at power-on
-  - **DE strategy OPEN:** an earlier version of this file claimed the STM32F405 USART has a hardware DE (`DEM`) feature. This is almost certainly wrong — RS-485 driver-enable hardware first appeared in F0/F3-generation USARTs. Verify in RM0090. Options: (a) GPIO DE driven from TC interrupt (TX-complete) — acceptable at V-MUX baud rates; (b) auto-direction RS-485 transceiver; (c) change MCU family (G4/L4/H7 have DEM/DEAT/DEDT).
+  - **DE strategy (recommended, pending decision):** STM32F405 USART has no hardware DE (no DEM/DEAT/DEDT; high confidence, RM0090 not in repo). Recommended: GPIO DE (PA1) asserted before TX, released in the USART **TC** interrupt (not DMA-complete); DE pulldown so reset = receive; IWDG; firmware cap on DE-high time; `/RE` tied low so every TX byte is read back for collision detection (V-MUX nodes already rely on local echo, Essentials p.8); transmit only after bus idle >= gap threshold. Rejected: auto-direction transceivers (MAX13487-style) — they drive only the dominant state and rely on bus bias/termination for recessive; V-MUX has neither (no termination, nodes 180–430 kΩ A–B). Alternatives: TIM one-pulse DE (hardware-timed release, more coupling to TX start); MCU with hardware DE (G4/L4/H7) — decide at Phase 2 PCB.
+  - **Bus-side transceiver:** with no termination/bias, the idle bus differential is set only by node leakage. Prefer a **true fail-safe** receiver (guaranteed defined output at 0 V differential) and ≤ 1/8 unit load; MAX3485 choice to be re-checked against this.
 
 ### USB-RS485 adapter (Phase 1 capture)
 - **Device:** DSD TECH SH-U11F isolated USB to RS485/RS422 converter
@@ -95,14 +101,14 @@ You are assisting an experienced professional embedded systems engineer on this 
 - **FTDI latency timer:** driver default is 16 ms, which batches reads and defeats ~10 ms gap detection. **Set to 1 ms** (Windows: Device Manager → port Advanced; Linux: `/sys/bus/usb-serial/devices/ttyUSBx/latency_timer`). Per-byte timestamps in the capture tool are interpolated, so inter-packet gaps inside one batched chunk are lost.
 - **Baud range:** 300 bps to 3 Mbps
 - **OS:** Windows / Linux / Mac (FTDI VCP driver)
-- **Connection:** RTS=Low, DTR=Low (never drive the bus); A+ to J1 pin 2, B− to J1 pin 3, GND to J1 pin 1
+- **Connection:** RTS=Low, DTR=Low (never drive the bus); A+ → J1 pin 1, B− → J1 pin 2, GND → J1 pin 3 (18-BK-GND, after meter check). Adapter is isolated, so GND here only sets the receiver common mode
 
 ### Oscilloscope connection
-- **CH1:** Probe tip → J1 pin 2 (BUS A), clip → J1 pin 1 (GND)
-- **CH2:** Probe tip → J1 pin 3 (BUS B), clip → J1 pin 1 (GND) — same point as CH1 clip
+- **CH1:** Probe tip → J1 pin 1 (BUS A), clip → J1 pin 3 (GND)
+- **CH2:** Probe tip → J1 pin 2 (BUS B), clip → J1 pin 3 (GND) — same point as CH1 clip
 - **Math:** CH1 − CH2 = true differential RS-485 signal (use this for triggering and decoding)
 - **Settings:** DC coupling, 1V/div, 1ms/div start, trigger CH1 rising ~1V, BW limit 20 MHz on
-- **Safety:** All clips to J1 pin 1 only — never to chassis ground
+- **Safety:** ground clips to J1 pin 3 only, **never to pin 1 or 2** (bus A/B). Pin 3 is vehicle ground, so a mains-earthed scope ties vehicle ground to earth; with shoreline power connected the vehicle may already be earthed. Prefer a differential probe or a battery-powered/isolated scope
 
 ---
 
@@ -156,10 +162,11 @@ Checksum = `msg_code XOR state XOR node`
 |----------|----------|---------------|
 | `idle` | 30s | SYNC only — baud detection, SyncDetector interval |
 | `basic` | 90s | All known commands ON/OFF — packet framing, decode |
-| `burst` | 45s | Back-to-back messages with short inter-message gaps. **Expected result not yet defined** (split vs merge depends on gap vs `--gap`); define and add a just-above-threshold scenario |
+| `burst` | 45s | 4 packets at 5 ms intra-burst gap (< 10 ms threshold). **Expected: each burst captured as ONE 16-byte packet** (merge is correct for idle-gap framing). Fail = burst split, or SYNC/bursts merged. No SYNC is sent inside a burst |
+| `threshold` | 45s | Packet pairs at threshold+margin (state 01, must split 2×4 B) and threshold−margin (state 00, must merge 1×8 B). `--threshold` (=capture `--gap`), `--margin` (default 3 ms). Statistical on hardware: host/USB jitter ~0–2 ms; capture measures arrival-to-arrival (idle + 1 byte time) |
 | `multinode` | 60s | Nodes 1/2/3 interleaved — node byte parsing |
 | `unknown` | 45s | Mixed known/unknown codes — yellow-highlight path in Display |
-| `full` | ~3 min | All scenarios in sequence — complete validation run |
+| `full` | ~3.5 min | All scenarios in sequence (incl. threshold) — complete validation run |
 | `interactive` | ∞ | Manual packet injection with background SYNC |
 
 **Direction control:**
@@ -211,15 +218,16 @@ python vmux_capture.py --map vmux_capture_*.csv        # build message map
 ```
 
 ### Phase 1 vehicle capture procedure
-1. Confirm SH-U11F R120 jumper absent (120Ω off)
-2. Connect A+ → J1 pin 2, B− → J1 pin 3, GND → J1 pin 1 (not chassis)
-3. Oscilloscope CH1 on A+, CH2 on B−, both clips to J1 pin 1; Math=CH1−CH2
-4. Power vehicle, verify SYNC burst visible on scope every ~4s
-5. Run `--scan` to identify adapter port
-6. Run `--detect` to confirm baud rate (SYNC interval should be 3.5–4.5s)
-7. Run capture; operate each vehicle function one at a time; log ~60s per function
-8. Run `--map` against captured CSV to build annotated message table
-9. Update `VMUX_KNOWN_COMMANDS` dict with confirmed mappings
+1. Confirm SH-U11F 120Ω termination is off (jumper location undocumented; meter A–B on the unpowered adapter)
+2. Meter J1 (DL connector behind ACP / in PDQ): pin 3 to battery negative ≈ 0 Ω; pin 4 voltage; pins 1–2 high resistance
+3. Connect A+ → J1 pin 1, B− → J1 pin 2, GND → J1 pin 3
+4. Oscilloscope CH1 on pin 1, CH2 on pin 2, both clips to pin 3; Math=CH1−CH2
+5. Power vehicle, verify SYNC burst visible on scope every ~4s
+6. Run `--scan` to identify adapter port
+7. Run `--detect` to confirm baud rate (SYNC interval should be 3.5–4.5s)
+8. Run capture; operate each vehicle function one at a time; log ~60s per function
+9. Run `--map` against captured CSV to build annotated message table
+10. Update `VMUX_KNOWN_COMMANDS` dict with confirmed mappings
 
 ---
 
@@ -231,14 +239,14 @@ python vmux_capture.py --map vmux_capture_*.csv        # build message map
 |-------|------|----------|-------------|
 | 4 | HMI renderer | 1 | LVGL on SPI display, config loaded from SD `layout.json` |
 | 3 | Macro engine | 3 | Sequenced multi-message macros triggered by HMI or GPIO |
-| 2 | Bus driver | 5 | USART2 DMA RX/TX, hardware DE pin, SYNC watchdog |
+| 2 | Bus driver | 5 | USART2 DMA RX/TX, DE control (strategy open — see DE section), SYNC watchdog |
 | 1 | HAL/peripherals | — | USART3, SPI1, I2C1, SDMMC, GPIO, TIM, IWDG |
 | 0 | V-MUX bus | — | Physical RS-485 network |
 
 ### Peripheral allocation (STM32F405RGT6, LQFP64)
 | Function | Peripheral | Pins |
 |----------|-----------|------|
-| V-MUX RS-485 | USART2 | PA2 TX, PA3 RX, PA1 DE (hardware) |
+| V-MUX RS-485 | USART2 | PA2 TX, PA3 RX, PA1 DE (GPIO on F405 — no hardware DE; PA1 is USART2_RTS on F405, check AF table if porting to G4) |
 | SD card config | SDIO | PC8–PC11 D0–D3, PC12 CLK, PD2 CMD |
 | SPI display | SPI1 | PA5 SCK, PA6 MISO, PA7 MOSI |
 | Touch controller | I2C1 | PB6 SCL, PB7 SDA |
@@ -317,6 +325,8 @@ typedef struct {
 | `requirements.txt` | Python dependencies (pyserial) — shared by both tools |
 | `README.md` | Usage guide for the capture tool |
 | `agents.md` | This file — agent context and project state |
+| `tests/` | pytest suite (no hardware): packet/checksum, PacketAssembler, SyncDetector, BusTx via `loop://`, burst/threshold scenarios on a fake clock |
+| `.githooks/pre-commit` | `py_compile` + pytest; enable with `git config core.hooksPath .githooks` |
 
 ---
 
@@ -335,6 +345,45 @@ When the SH-U11F adapter arrives and the first vehicle capture session runs, the
 | Checksum algorithm | Unknown — last byte of packet may be XOR, CRC8, or sum | Capture same command multiple times; compare trailing byte |
 
 ---
+
+## Verification status (2026-11-14)
+
+Sources in `docs/reference/` (PDFs are git-ignored; they carry Braun/Weldon
+proprietary notices): `V-MUXConnectorSpec202405.pdf` (Weldon, May 2024),
+`V-MUX_Essentials.pdf` (Weldon), `6207 Electrical Prints.pdf` (Braun; vector
+drawings with no text layer, read visually). Not present: SH-U11F manual,
+Weldon Diagnostics manual, RM0090, component datasheets.
+
+| Item | Status | Source |
+|------|--------|--------|
+| J1 = DT04-4P: pin 1 A, pin 2 B | **Confirmed (docs)** | Connector Spec p.8; Essentials p.5; Braun 49384 Detail C |
+| J1 pin 3 ground, pin 4 power | **Confirmed in Braun print** (18-BK-GND; 18-312-OG). Weldon generic: optional / not used | Braun 49384 Detail C. Meter on vehicle before use |
+| Pin 4 circuit 312 is battery-hot or ignition-switched | **Unconfirmed** | Meter key-off/key-on |
+| J1 location on this vehicle | Per print: behind ACP or in PDQ ("DL") | Braun 49384 |
+| Kit 0K90-3111-00 = network forward tap | **Confirmed (part exists, description)**; not confirmed that Braun used this kit | Connector Spec p.6–7 |
+| Cable on this vehicle | **Belden 8760**, not Weldon 0L20-1600 | Braun 49384 note 1 |
+| No termination; ≤ 32 nodes | **Confirmed** | Connector Spec p.7; Essentials p.5–7 |
+| SYNC from node 1, others expect it ≥ every 4 s, else OUT OF NETWORK | **Confirmed** | Essentials p.8 |
+| Local echo (node hears own TX) | **Confirmed** (Hercules nodes) | Essentials p.8 |
+| Node A–B loading ≈ 180–430 kΩ unpowered | **Confirmed** | Essentials p.7 |
+| Shield single-point ground; Braun pins it at node 1 only | **Confirmed** | Essentials p.5; Braun 49384 Detail A |
+| Baud, framing, checksum, message codes | **Not in any supplied doc** | Phase 1 capture |
+| BC counter, Diagnostics v1.4.2, `.dav` files | **Not in supplied docs** (from chat) | Weldon Diagnostics manual |
+| SH-U11F 120 Ω = jumper, default off | Per user guide (as reported in chat; guide not in repo) | Place guide in `docs/reference/` |
+| SH-U11F jumper location / label | **Undocumented** | Open the shell |
+| SH-U11F FTDI part, TXDEN auto-direction | **Unverified** | Scope A/B while transmitting; read FTDI EEPROM CBUS config (FT_PROG) |
+| SH-U11F isolation voltage / isolator part | **Unverified** | Vendor datasheet |
+| STM32F405 USART has no DEM/DEAT/DEDT | High confidence (F4 USART_CR3 has no DEM bit) but not checked against a local RM0090 | RM0090 USART_CR3 |
+| Schematic D1 "SM712, 5 V bidirectional, ±6 V" | **Likely wrong.** SM712 is an asymmetric RS-485 TVS (≈ −7 V / +12 V working). Fix wording when datasheet is in hand | SM712 datasheet |
+| Schematic U1 "ISO7241 or ADuM1201" | **Inconsistent.** ADuM1201 is 2-channel; TX + RX + DE needs ≥ 3 | Datasheets |
+| Isolation rating 2500 Vrms | **Unverified.** System rating is the weakest of isolator and DC/DC (MEE1 series rating unconfirmed) | Datasheets |
+
+## Known software issues (open)
+
+- `SyncDetector` hypothesis 2 ignores timing: any 2–4 byte packet seen 3× in the window is called SYNC (strict xfail test documents it).
+- `_process_packet` prints the "Baud rate OK" banner only when `pkt_num == 2`, which is almost never true.
+- `VMUX_MAX_PACKET_BYTES` is declared but not enforced by `PacketAssembler`.
+- `PacketAssembler` measures arrival-to-arrival, so the effective idle threshold is `gap − 1 byte time` (≈1 ms at 9600).
 
 ## Reference documents
 

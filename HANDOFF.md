@@ -13,7 +13,7 @@ Read `agents.md` for full project context. This file is the state-of-play and th
 ## Known corrections to earlier chat output (treat earlier claims as withdrawn)
 1. STM32F405 has no hardware RS-485 DE (DEM/DEAT/DEDT) — that arrived in F0/F3+. Verify in RM0090. DE strategy is open (GPIO + TC interrupt, auto-direction transceiver, or MCU change).
 2. SH-U11F: direction control (TXDEN), jumper location, isolation voltage, isolator part were asserted without support. The user guide only says 120Ω is a jumper, default disabled.
-3. J1 pinout and Weldon part number (0K90-3111-00) are unverified against Brad's wiring diagrams.
+3. J1 pinout was **wrong** (pin 1 = GND). Docs show pin 1 = A, pin 2 = B, pin 3 = GND, pin 4 = power (see agents.md). 0K90-3111-00 is the Weldon tap kit; Braun cable is Belden 8760.
 4. Message code table is placeholders, not from Weldon docs.
 5. FTDI latency timer (16 ms default) was omitted; set to 1 ms.
 6. Capture timestamps are interpolated per byte; inter-packet gaps inside one batched read are lost.
@@ -21,10 +21,10 @@ Read `agents.md` for full project context. This file is the state-of-play and th
 8. Scope voltages in schematic/block diagram are illustrative; SM712 wording needs checking.
 
 ## Work queue (priority order)
-1. Replace repo `vmux_generator.py` with the fixed copy; delete `vmux_capture_README.md` (duplicate of README); add `.gitignore`; commit.
-2. Add a test harness (pytest) around `PacketAssembler`, `build_packet`, checksum, `SyncDetector`, using `loop://` or fakes. Make `py_compile` + tests a pre-commit check. (`ast.parse` misses `global`-after-use.)
-3. Define burst-scenario expectations; add a gap-just-above-threshold scenario.
-4. Verify J1 pinout against `docs/reference/` wiring diagrams; correct agents.md and schematic.
+1. ~~Replace generator, remove duplicate README, add .gitignore~~ — done in 7d28b16. Remove the committed `vmux_handoff_package.tar.gz`.
+2. ~~pytest harness + pre-commit~~ — done (`tests/`, `.githooks/pre-commit`; enable with `git config core.hooksPath .githooks`).
+3. ~~Burst expectations + threshold scenario~~ — done (burst = one 16-byte packet per burst; `--scenario threshold`).
+4. ~~Verify J1 pinout~~ — done from docs: pin 1 = A, pin 2 = B, pin 3 = GND, pin 4 = circuit 312 power (earlier pin 1 = GND was **wrong**). Meter-check on the vehicle remains. See agents.md "Verification status".
 5. Verify SH-U11F details against the manual in `docs/reference/` once placed; confirm direction control on a scope when hardware arrives.
 6. Decide DE strategy (see correction 1); update schematic and firmware plan.
 7. Phase 1 vehicle capture when adapter arrives; build message map; replace placeholder codes.
@@ -38,7 +38,7 @@ Read `agents.md` for full project context. This file is the state-of-play and th
 ## Hard safety rules
 - NO termination resistors on the V-MUX bus. Ever.
 - Phase 1 is passive: never drive the bus. RTS/DTR low. Generator is for bench only, never connected to the vehicle.
-- Bus GND (J1 pin 1, if verified) only for references; never chassis.
+- Probe/adapter ground = J1 pin 3 (18-BK-GND) only. Never clip a ground lead to J1 pin 1 or 2 (bus A/B). Never connect the cable shield.
 - Any incrementing BC (bus collision) count on the vehicle is a serious fault.
 
 ## Environment notes

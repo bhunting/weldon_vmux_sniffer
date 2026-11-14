@@ -15,6 +15,7 @@ SCENARIOS
   idle        Continuous SYNC only (Node 1 broadcast, ~4s period)
   basic       SYNC + common commands ON/OFF with realistic timing
   burst       Rapid back-to-back packets to stress gap-framing detection
+  threshold   Packet pairs straddling the capture gap threshold (split/merge check)
   multinode   Traffic from multiple simulated nodes (1, 2, 3)
   unknown     Mix of known and undocumented message codes
   full        Full automated test suite — runs all scenarios in sequence
@@ -48,6 +49,9 @@ VMUX_IDLE_GAP_MS      = 10     # capture tool gap threshold — generator must e
 VMUX_MIN_GAP_MS       = 20     # minimum enforced gap between packets (2× threshold)
 VMUX_INTER_MSG_MS     = 5      # gap between messages within the same burst (< gap threshold)
                                 # NOTE: keep < VMUX_IDLE_GAP_MS to test burst detection
+VMUX_THRESHOLD_MARGIN_MS = 3.0  # threshold scenario: request threshold ± this margin.
+                                # Must exceed host-side timing jitter (sleep resolution,
+                                # USB frame, FTDI latency timer) or results are noisy.
 
 # Packet field positions
 IDX_MSG_CODE  = 0
@@ -176,15 +180,16 @@ class BusTx:
     """
     Wraps a serial port with RS-485 direction control and transmission logging.
 
-    Direction control strategy for SH-U11F:
-      The SH-U11F FT232RL uses CBUS TXDEN to drive DE automatically — the chip
-      asserts DE on TX start and deasserts after the last stop bit, in hardware.
-      No manual RTS/DTR manipulation is needed or correct for this adapter.
-      rts and dtr are left False to avoid contention.
+    Direction control strategy for SH-U11F — UNVERIFIED:
+      The SH-U11F user guide does not document how DE is driven. FT232R CBUS
+      TXDEN (hardware auto-DE) is a plausible implementation but is NOT
+      confirmed for this adapter. Default mode assumes automatic direction
+      control and leaves rts/dtr False. Confirm on a scope (A/B differential
+      while transmitting) before relying on it.
 
-    For adapters without hardware auto-DE (e.g. generic CH340-based adapters):
-      Set rts=True before write(), rts=False after write() completes. The
-      --manual-de flag enables this mode.
+    If packets do not appear on the bus (adapter without auto-DE):
+      --manual-de sets rts=True before write() and rts=False after the
+      shift-register wait. RTS polarity/wiring to DE is also unverified.
     """
 
     def __init__(self, port: str, baud: int, manual_de: bool = False,
@@ -407,22 +412,58 @@ def scenario_basic(tx: BusTx, duration: float) -> None:
 #  Scenario: burst — rapid back-to-back packets
 # ─────────────────────────────────────────────
 
+BURST_ON = [
+    (MSG_SCENE_LIGHTS,    STATE_ON,  NODE_SCENE,  "Scene Lights ON"),
+    (MSG_FRONT_LIGHT_BAR, STATE_ON,  NODE_LIGHTS, "Front Light Bar ON"),
+    (MSG_GRILL_LIGHTS,    STATE_ON,  NODE_LIGHTS, "Grill Lights ON"),
+    (MSG_WARNING_FRONT,   STATE_ON,  NODE_LIGHTS, "Warning Front ON"),
+]
+BURST_OFF = [
+    (MSG_SCENE_LIGHTS,    STATE_OFF, NODE_SCENE,  "Scene Lights OFF"),
+    (MSG_FRONT_LIGHT_BAR, STATE_OFF, NODE_LIGHTS, "Front Light Bar OFF"),
+    (MSG_GRILL_LIGHTS,    STATE_OFF, NODE_LIGHTS, "Grill Lights OFF"),
+    (MSG_WARNING_FRONT,   STATE_OFF, NODE_LIGHTS, "Warning Front OFF"),
+]
+
+
+def burst_schedule(commands, lead_gap_ms: Optional[float] = None,
+                   inter_msg_ms: float = VMUX_INTER_MSG_MS
+                   ) -> List[Tuple[bytes, Optional[float], str]]:
+    """
+    Return [(packet, gap_before_ms, label), ...] for one burst.
+    The first packet uses lead_gap_ms (None -> tx.min_gap_ms); the rest use
+    inter_msg_ms, which is deliberately below the capture gap threshold.
+    """
+    return [(build_packet(code, state, node),
+             lead_gap_ms if i == 0 else inter_msg_ms,
+             label)
+            for i, (code, state, node, label) in enumerate(commands)]
+
+
 def scenario_burst(tx: BusTx, duration: float) -> None:
     """
-    Send packets with gaps shorter than VMUX_IDLE_GAP_MS to test burst
-    handling, then normal-gap packets to confirm boundary detection.
+    Back-to-back packets with intra-burst gaps BELOW the capture threshold.
 
-    Tests:
-      - F1: timestamp interpolation must correctly assign distinct times to
-            each byte in a buffered chunk — all bytes same timestamp would
-            collapse a burst into one giant packet
-      - F2: idle flush must trigger correctly after the burst ends
-      - PacketAssembler must NOT split intra-burst bytes into separate packets
+    EXPECTED RESULT (capture --gap 10, generator defaults):
+      Idle-gap framing cannot see message boundaries inside a burst, so each
+      burst of 4 x 4-byte packets is captured as ONE 16-byte packet. The
+      merge is correct behaviour of the framing, not a fault:
+        ON  burst -> 20 01 02 23 11 01 03 13 12 01 03 10 13 01 03 11
+        OFF burst -> 20 00 02 22 11 00 03 12 12 00 03 11 13 00 03 10
+        gap_before of each merged packet >= tx.min_gap_ms (default 20 ms)
+        SYNC is never sent inside a burst, so it never merges into one.
+      FAIL if a burst is split (intra-burst gap exceeded the threshold: host
+      jitter or receiver latency timer) or two bursts / a burst and a SYNC
+      merge (idle flush or timestamp interpolation broken).
+      Precondition: receiver FTDI latency timer = 1 ms. At the 16 ms default
+      the result depends on USB batching and the run is not valid.
+
+    Use the 'threshold' scenario to test behaviour near the gap boundary.
     """
     print(f"\n{ANSI_CYAN}Scenario: BURST — stress gap-framing for {duration:.0f}s{ANSI_RESET}")
-    print(f"{ANSI_DIM}Tests: F1 timestamp interpolation, intra-burst framing, idle flush (F2){ANSI_RESET}")
     print(f"{ANSI_DIM}Intra-burst gap = {VMUX_INTER_MSG_MS}ms  (< {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}")
-    print(f"{ANSI_DIM}Inter-burst gap = {tx.min_gap_ms}ms  (> {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}\n")
+    print(f"{ANSI_DIM}Inter-burst gap = {tx.min_gap_ms}ms  (> {VMUX_IDLE_GAP_MS}ms threshold){ANSI_RESET}")
+    print(f"{ANSI_DIM}Expected: each burst captured as ONE 16-byte packet (merge is correct){ANSI_RESET}\n")
 
     sync  = SyncScheduler(tx)
     t_end = time.time() + duration
@@ -430,46 +471,94 @@ def scenario_burst(tx: BusTx, duration: float) -> None:
     tx.send(sync_packet(), label="SYNC (Node 1) — initial", gap_before_ms=200)
     sync._next_t = time.time() + VMUX_SYNC_INTERVAL_S
 
-    burst_commands = [
-        (MSG_SCENE_LIGHTS,    STATE_ON,  NODE_SCENE,  "Scene Lights ON"),
-        (MSG_FRONT_LIGHT_BAR, STATE_ON,  NODE_LIGHTS, "Front Light Bar ON"),
-        (MSG_GRILL_LIGHTS,    STATE_ON,  NODE_LIGHTS, "Grill Lights ON"),
-        (MSG_WARNING_FRONT,   STATE_ON,  NODE_LIGHTS, "Warning Front ON"),
-    ]
-    burst_off = [
-        (MSG_SCENE_LIGHTS,    STATE_OFF, NODE_SCENE,  "Scene Lights OFF"),
-        (MSG_FRONT_LIGHT_BAR, STATE_OFF, NODE_LIGHTS, "Front Light Bar OFF"),
-        (MSG_GRILL_LIGHTS,    STATE_OFF, NODE_LIGHTS, "Grill Lights OFF"),
-        (MSG_WARNING_FRONT,   STATE_OFF, NODE_LIGHTS, "Warning Front OFF"),
-    ]
-
     burst_n = 0
     while time.time() < t_end:
-        if sync.tick():
-            continue
+        sync.tick()            # SYNC only between bursts, never inside one
 
         burst_n += 1
-        print(f"{ANSI_DIM}  — burst #{burst_n} start —{ANSI_RESET}")
+        print(f"{ANSI_DIM}  — burst #{burst_n} ON  (expect 1 x 16-byte packet) —{ANSI_RESET}")
+        for pkt, gap, label in burst_schedule(BURST_ON):
+            tx.send(pkt, label=label, gap_before_ms=gap)
 
-        # Fire burst ON packets with sub-threshold gap (intra-burst)
-        for i, (code, state, node, label) in enumerate(burst_commands):
-            gap = None if i == 0 else VMUX_INTER_MSG_MS   # None -> tx.min_gap_ms
-            tx.send(build_packet(code, state, node), label=label,
-                    gap_before_ms=gap)
-            if sync.tick(): break
+        time.sleep(random.uniform(0.8, 1.5))   # idle flush in capture tool (F2)
+        sync.tick()
 
-        # Deliberate long pause — triggers idle flush in capture tool (F2)
-        time.sleep(random.uniform(0.8, 1.5))
-        if sync.tick(): pass
+        print(f"{ANSI_DIM}  — burst #{burst_n} OFF (expect 1 x 16-byte packet) —{ANSI_RESET}")
+        for pkt, gap, label in burst_schedule(BURST_OFF):
+            tx.send(pkt, label=label, gap_before_ms=gap)
 
-        # Burst OFF
-        for i, (code, state, node, label) in enumerate(burst_off):
-            gap = None if i == 0 else VMUX_INTER_MSG_MS   # None -> tx.min_gap_ms
-            tx.send(build_packet(code, state, node), label=label,
-                    gap_before_ms=gap)
-
-        print(f"{ANSI_DIM}  — burst #{burst_n} end —{ANSI_RESET}")
         time.sleep(random.uniform(0.5, 1.2))
+
+
+# ─────────────────────────────────────────────
+#  Scenario: threshold — pairs straddling the gap threshold
+# ─────────────────────────────────────────────
+
+THRESHOLD_PAIR_SEPARATION_MS = 200.0   # between pairs; far above any threshold
+
+
+def threshold_cases(threshold_ms: float = VMUX_IDLE_GAP_MS,
+                    margin_ms: float = VMUX_THRESHOLD_MARGIN_MS) -> List[dict]:
+    """
+    Two packet pairs. 'above': second packet follows after threshold+margin,
+    must be captured as 2 x 4-byte packets. 'below': threshold-margin, must
+    merge into 1 x 8-byte packet. State 0x01/0x00 tags above/below so the
+    cases are distinguishable in the capture log.
+    """
+    return [
+        {"name": "above", "gap_ms": threshold_ms + margin_ms, "expect_packets": 2,
+         "pkts": [build_packet(MSG_SCENE_LIGHTS, STATE_ON, NODE_SCENE),
+                  build_packet(MSG_GRILL_LIGHTS, STATE_ON, NODE_LIGHTS)]},
+        {"name": "below", "gap_ms": max(0.0, threshold_ms - margin_ms), "expect_packets": 1,
+         "pkts": [build_packet(MSG_SCENE_LIGHTS, STATE_OFF, NODE_SCENE),
+                  build_packet(MSG_GRILL_LIGHTS, STATE_OFF, NODE_LIGHTS)]},
+    ]
+
+
+def scenario_threshold(tx: BusTx, duration: float,
+                       threshold_ms: float = VMUX_IDLE_GAP_MS,
+                       margin_ms: float = VMUX_THRESHOLD_MARGIN_MS) -> None:
+    """
+    Alternate packet pairs separated by threshold+margin and threshold-margin.
+
+    EXPECTED RESULT (capture tool --gap must equal threshold_ms):
+      'above' pair (state 01): 2 packets  20 01 02 23 | 12 01 03 10
+                               second packet gap_before ~ threshold+margin
+      'below' pair (state 00): 1 packet   20 00 02 22 12 00 03 11
+      Pairs are >= 200 ms apart and never merge with each other.
+    On hardware this is statistical: the real wire gap is the requested gap
+    plus ~0-2 ms of host/USB jitter, and the capture tool measures
+    arrival-to-arrival (includes one byte time). Report split rate per case.
+    Margins below ~3 ms are not meaningful. Receiver latency timer = 1 ms.
+    """
+    cases = threshold_cases(threshold_ms, margin_ms)
+    print(f"\n{ANSI_CYAN}Scenario: THRESHOLD — gap {threshold_ms}±{margin_ms}ms "
+          f"for {duration:.0f}s{ANSI_RESET}")
+    for c in cases:
+        print(f"{ANSI_DIM}  {c['name']:5s}: gap {c['gap_ms']:.1f}ms -> expect "
+              f"{c['expect_packets']} packet(s){ANSI_RESET}")
+    print()
+
+    sync  = SyncScheduler(tx)
+    t_end = time.time() + duration
+
+    tx.send(sync_packet(), label="SYNC (Node 1) — initial", gap_before_ms=200)
+    sync._next_t = time.time() + VMUX_SYNC_INTERVAL_S
+
+    counts = {c["name"]: 0 for c in cases}
+    while time.time() < t_end:
+        for c in cases:
+            sync.tick()
+            first, second = c["pkts"]
+            tx.send(first, label=f"{c['name']} #1",
+                    gap_before_ms=THRESHOLD_PAIR_SEPARATION_MS)
+            tx.send(second, label=f"{c['name']} #2 (gap {c['gap_ms']:.1f}ms)",
+                    gap_before_ms=c["gap_ms"])
+            counts[c["name"]] += 1
+
+    print(f"\n{ANSI_DIM}  Pairs sent: above={counts['above']} below={counts['below']} "
+          f"(expect {2 * counts['above']} x 4-byte + {counts['below']} x 8-byte, "
+          f"plus SYNC){ANSI_RESET}")
 
 
 # ─────────────────────────────────────────────
@@ -610,12 +699,14 @@ def scenario_full(tx: BusTx) -> None:
     print(f"  All known message codes captured")
     print(f"  ≥3 unknown codes captured (yellow in terminal)")
     print(f"  Node 1, 2, 3 all appear in node field")
-    print(f"  No merged packets in burst scenario\n")
+    print(f"  BURST: each 4-packet burst captured as ONE 16-byte packet")
+    print(f"  THRESHOLD: 'above' pairs split (2 x 4B), 'below' pairs merge (1 x 8B)\n")
 
     steps = [
         ("IDLE",      20,  scenario_idle),
         ("BASIC",     60,  scenario_basic),
         ("BURST",     30,  scenario_burst),
+        ("THRESHOLD", 20,  scenario_threshold),
         ("MULTINODE", 40,  scenario_multinode),
         ("UNKNOWN",   30,  scenario_unknown),
     ]
@@ -717,7 +808,8 @@ def main():
 Scenarios:
   idle         SYNC only — validates baud detection and SyncDetector
   basic        Realistic command traffic — validates packet framing and decode
-  burst        Rapid packets — validates F1 timestamp interpolation and F2 idle flush
+  burst        Rapid packets — each burst must merge into one 16-byte packet
+  threshold    Pairs at threshold±margin — 'above' must split, 'below' must merge
   multinode    Multi-node traffic — validates node field parsing
   unknown      Mixed known/unknown codes — validates yellow-highlight path
   full         All scenarios in sequence (~3 min total)
@@ -730,6 +822,7 @@ Examples:
   python vmux_generator.py --port COM4 --baud 19200 --scenario interactive
   python vmux_generator.py --port COM4 --baud 19200 --scenario basic --duration 120
   python vmux_generator.py --port COM4 --baud 19200 --scenario burst --manual-de
+  python vmux_generator.py --port COM4 --baud 19200 --scenario threshold --threshold 10 --margin 3
 
 Physical connection:
   Generator laptop SH-U11F  →  Capture laptop SH-U11F
@@ -743,7 +836,7 @@ Physical connection:
     parser.add_argument("--baud",      type=int, default=19200,
                         help="Baud rate — must match vmux_capture.py (default: 19200)")
     parser.add_argument("--scenario",  default="basic",
-                        choices=["idle","basic","burst","multinode",
+                        choices=["idle","basic","burst","threshold","multinode",
                                  "unknown","full","interactive"],
                         help="Test scenario to run (default: basic)")
     parser.add_argument("--duration",  type=float, default=None,
@@ -756,6 +849,12 @@ Physical connection:
                         help="Use RTS for manual DE control (non-SH-U11F adapters)")
     parser.add_argument("--gap",       type=float, default=VMUX_MIN_GAP_MS,
                         help=f"Minimum inter-packet gap in ms (default: {VMUX_MIN_GAP_MS})")
+    parser.add_argument("--threshold", type=float, default=VMUX_IDLE_GAP_MS,
+                        help=f"threshold scenario: capture tool --gap value in ms "
+                             f"(default: {VMUX_IDLE_GAP_MS})")
+    parser.add_argument("--margin",    type=float, default=VMUX_THRESHOLD_MARGIN_MS,
+                        help=f"threshold scenario: ± margin around threshold in ms "
+                             f"(default: {VMUX_THRESHOLD_MARGIN_MS})")
 
     args = parser.parse_args()
 
@@ -783,6 +882,7 @@ Physical connection:
         "idle":      30.0,
         "basic":     90.0,
         "burst":     45.0,
+        "threshold": 45.0,
         "multinode": 60.0,
         "unknown":   45.0,
     }
@@ -793,6 +893,10 @@ Physical connection:
 
         elif args.scenario == "interactive":
             scenario_interactive(tx)
+
+        elif args.scenario == "threshold":
+            scenario_threshold(tx, args.duration or default_durations["threshold"],
+                               threshold_ms=args.threshold, margin_ms=args.margin)
 
         else:
             dur = args.duration or default_durations[args.scenario]

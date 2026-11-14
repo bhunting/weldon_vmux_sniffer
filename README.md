@@ -48,7 +48,8 @@ python vmux_generator.py --port COM4 --baud 19200 --scenario full
 |----------|----------|-------|
 | `idle` | 30s | SYNC timing, baud detection |
 | `basic` | 90s | Packet framing, known message decode |
-| `burst` | 45s | Timestamp interpolation, idle flush |
+| `burst` | 45s | Sub-threshold gaps: each 4-packet burst must capture as ONE 16-byte packet |
+| `threshold` | 45s | Pairs at threshold ± margin (`--threshold`, `--margin`): above must split, below must merge |
 | `multinode` | 60s | Node byte parsing |
 | `unknown` | 45s | Unknown code yellow-highlight |
 | `full` | ~3 min | All of the above in sequence |
@@ -59,6 +60,13 @@ python vmux_generator.py --port COM4 --baud 19200 --scenario full
 - Within 14s: `SYNC CONFIRMED OK (avg=4.xx s)`
 - Known commands: green; unknown codes: yellow
 - `--map` shows all generator codes with correct counts
+- Burst: 16-byte merged packets only; never a SYNC merged into a burst
+- Threshold: state-01 pairs as two 4-byte packets, state-00 pairs as one 8-byte packet.
+  On hardware this is statistical (host/USB jitter ~0-2 ms); report the split rate.
+
+**Precondition for any timing result:** set the receiving adapter's FTDI latency
+timer to 1 ms (driver default 16 ms batches reads and defeats gap framing).
+Windows: Device Manager → port → Advanced. Linux: `/sys/bus/usb-serial/devices/ttyUSBx/latency_timer`.
 
 **If capture shows only garbage:** swap A+/B− on one adapter (polarity inversion).
 
@@ -93,19 +101,39 @@ python vmux_capture.py --map vmux_capture_20240101_120000.csv
 pre-connection step — V-MUX explicitly forbids termination resistors anywhere on
 the network.
 
-Open the SH-U11F enclosure (two screws on the underside). On the PCB, locate
-the 2-pin header labelled **R120** or **120R** near the terminal block end. This
-jumper enables a 120Ω resistor across A+ and B−. It ships with the jumper
-absent (disabled) by default — confirm it is absent before connecting.
-If a jumper block is present, remove it and store it safely.
+The SH-U11F user guide states the 120Ω termination is a jumper and is
+disabled by default. The jumper's location and silkscreen label are **not
+documented** — open the shell, identify it, and confirm termination is off
+(measure A–B resistance with the adapter unpowered and disconnected: it should
+not read ~120Ω) before connecting.
 
 Connection checklist:
 
-1. Confirm R120 jumper is **absent** (120Ω OFF).
-2. Connect adapter **A+** to J1 pin 2 (BUS A).
-3. Connect adapter **B−** to J1 pin 3 (BUS B).
-4. Connect adapter **GND** to J1 pin 1 (bus GND) — NOT to chassis ground.
-5. Keep RTS/DTR low — the tool does this automatically on open.
+J1 is the V-MUX network tap, a Deutsch DT04-4P. Pinout per Weldon Connector
+Spec (2024-05) p.8 and Braun dwg 49384 Detail C ("DL" connector, behind the
+ACP or in the PDQ): **pin 1 = comms A, pin 2 = comms B, pin 3 = ground
+(18-BK-GND), pin 4 = power (circuit 312)**. Meter it on the vehicle first.
+
+1. Confirm 120Ω termination is **off**.
+2. Set the FTDI latency timer to 1 ms.
+3. Meter J1: pin 3 to battery negative ≈ 0 Ω; note pin 4 voltage.
+4. Connect adapter **A+** to J1 pin 1 (comms A).
+5. Connect adapter **B−** to J1 pin 2 (comms B).
+6. Connect adapter **GND** to J1 pin 3 (ground). Never put a scope ground clip on pin 1 or 2.
+7. Keep RTS/DTR low — the tool does this automatically on open.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m py_compile vmux_capture.py vmux_generator.py
+python -m pytest
+git config core.hooksPath .githooks   # once per clone: runs both on every commit
+```
+
+The suite covers `build_packet`/checksum, `PacketAssembler` framing (including
+the burst and threshold expectations), `SyncDetector`, `BusTx` over pyserial
+`loop://`, and the burst/threshold scenarios on a fake clock. No hardware needed.
 
 ## Output files
 
